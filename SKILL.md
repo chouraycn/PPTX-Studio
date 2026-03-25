@@ -189,12 +189,44 @@ slide.addShape(pres.shapes.RECTANGLE, { fill: { color: "FFFFFF" }, shadow: makeS
 
 ## Transform Presentations
 
-Two powerful transformation modes — both now include **AI-powered stages**:
+Two powerful transformation modes — both now include **AI-powered stages** and **enhanced visual features**:
 
 | Mode | Description |
 |------|-------------|
 | **Template Apply** | 三阶段：① AI审校内容（纠错/精简/补全） → ② 脚本套入模板（配色/字体/布局） → ③ AI逐页美化（排版/字数控制/空行清理） |
-| **Style Beautify** | Analyze PPT content and redesign the visual style — colors, fonts, layouts — without changing the content |
+| **Style Beautify** | Redesign visual style with **12 themes**, **10 layout variants**, **smart image enhancement**, and **auto icon insertion** |
+
+### Enhanced Visual Features (New)
+
+**12 Professional Themes:**
+- Classic: `executive`, `tech`, `creative`, `warm`, `minimal`, `bold`, `nature`, `ocean`
+- New: `elegant` (深灰蓝+珊瑚红), `modern` (紫罗兰+粉色), `sunset` (暖橙+金黄), `forest` (深林绿+薄荷)
+
+**10 Layout Variants (Auto-rotated for visual variety):**
+1. `accent_bar` — 左侧强调条（默认）
+2. `numbered_list` — 数字圆圈列表
+3. `stat_highlight` — 首条数据高亮卡片
+4. `two_tone` — 双色分栏布局
+5. `header_band` — 顶部色带标题
+6. `card_grid` — 卡片网格（2×2 自动排列）
+7. `timeline` — 时间轴布局
+8. `split_diagonal` — 对角分割
+9. `image_focus` — 图片聚焦框架
+10. `quote_block` — 引用块布局
+
+**Smart Image Enhancement:**
+- 自动圆角（roundRect）
+- 柔和阴影（outer shadow）
+- 主题色边框
+
+**Smart Typography:**
+- 动态字号（根据内容密度自动调整）
+- 1.2倍行距优化
+- 智能图标插入（基于关键词匹配 50+ 图标）
+
+**Gradient Backgrounds:**
+- 标题页/章节页可使用渐变色背景
+- 基于主题色的自动渐变
 
 Transform scripts quick reference:
 
@@ -513,32 +545,98 @@ python scripts/thumbnail.py source.pptx
 
 **Step 2 — Choose a theme**
 
-Based on the content topic, select a theme:
+Based on the content topic, select from 12 professional themes:
 
-| Theme | 中文 | Use when content is about... | 适用场景 |
-|-------|------|------------------------------|---------|
-| `executive` | 行政深蓝 | Corporate, finance, strategy | 企业战略、财务报告、管理层汇报 |
-| `tech` | 科技深色 | Technology, software, AI, data | AI/科技产品、数据分析、投资人路演 |
-| `creative` | 创意珊瑚 | Design, marketing, branding, arts | 品牌营销、创意方案、活动策划 |
-| `warm` | 温暖陶土 | Education, community, wellness | 教育培训、社区活动、健康wellness |
-| `minimal` | 极简炭灰 | Clean reports, academic, research | 学术报告、研究成果、简洁商务 |
-| `bold` | 大胆酒红 | Sales pitches, product launches | 销售提案、产品发布、强视觉冲击 |
-| `nature` | 自然森绿 | Environment, agriculture, sustainability | 环保、农业、可持续发展 |
-| `ocean` | 海洋蓝绿 | Healthcare, science, trust-based topics | 医疗健康、科学研究、信任导向主题 |
+| Theme | Style | Best for |
+|-------|-------|----------|
+| `executive` | 商务深蓝+金色 | 企业汇报、投资路演 |
+| `tech` | 科技青绿+深灰 | 技术分享、产品发布 |
+| `creative` | 活力珊瑚+海军蓝 | 创意提案、设计展示 |
+| `warm` | 暖陶土+鼠尾草绿 | 教育、非营利组织 |
+| `minimal` | 极简炭灰+纯白 | 学术报告、简洁风格 |
+| `bold` | 大胆樱桃红+深蓝 | 冲击力强的演讲 |
+| `nature` | 森林绿+苔藓 | 环保、健康、农业 |
+| `ocean` | 深海蓝+薄荷绿 | 旅游、海洋、科技 |
+| `elegant` | 深灰蓝+珊瑚红 | 高端商务、奢侈品 |
+| `modern` | 紫罗兰+粉色渐变 | 互联网、时尚、创新 |
+| `sunset` | 暖橙+金黄渐变 | 能源、餐饮、温暖主题 |
+| `forest` | 深林绿+薄荷 | 可持续发展、有机产品 |
+
+**Enhanced Options:**
+
+```bash
+# Basic beautify
+python scripts/beautify_ppt.py source.pptx output.pptx --theme tech
+
+# With gradient backgrounds for title slides
+python scripts/beautify_ppt.py source.pptx output.pptx --theme modern --gradient-bg
+
+# With smart icons (auto-insert based on keywords)
+python scripts/beautify_ppt.py source.pptx output.pptx --theme creative --smart-icons
+
+# Full enhancement (gradient + icons + image enhancement)
+python scripts/beautify_ppt.py source.pptx output.pptx --theme elegant --gradient-bg --smart-icons
+
+# Skip layout restructuring (only colors/fonts)
+python scripts/beautify_ppt.py source.pptx output.pptx --theme minimal --no-restructure
+
+# Skip image enhancement (if you want original image styling)
+python scripts/beautify_ppt.py source.pptx output.pptx --theme tech --no-image-enhance
+```
+
+**Layout Variants (Auto-applied for variety):**
+
+The beautifier automatically rotates through 10 layout variants to prevent visual monotony:
+
+1. **accent_bar** — 左侧垂直强调条（最常用）
+2. **numbered_list** — 大号数字圆圈列表（适合 4+ 要点）
+3. **stat_highlight** — 首条数据高亮卡片（适合含数字的要点）
+4. **two_tone** — 双色分栏（每第4页自动应用）
+5. **header_band** — 顶部色带标题
+6. **card_grid** — 卡片网格 2×2（自动排列 2-4 个要点）
+7. **timeline** — 时间轴（适合流程性内容）
+8. **split_diagonal** — 对角分割（视觉冲击）
+9. **image_focus** — 图片聚焦框架（含装饰边框）
+10. **quote_block** — 引用块（带引号和左侧强调条）
+
+> 💡 **Tip:** The system automatically selects the best layout based on content type and avoids using the same layout 3 times in a row.
+
+**Smart Features:**
+
+- **Dynamic Font Sizing:** Automatically adjusts body text size based on content density (dense content → slightly smaller, sparse content → slightly larger)
+- **Image Enhancement:** All images get rounded corners, subtle shadows, and theme-colored borders
+- **Smart Icons:** When using `--smart-icons`, keywords like "growth", "team", "technology" automatically get relevant emoji icons prepended
+- **Paragraph Spacing:** 1.2x line spacing applied for better readability
+- **Gradient Backgrounds:** Title/section slides can have beautiful gradients when using `--gradient-bg`
 
 **Step 3 — Run the beautify script**
 
 ```bash
+# Basic usage
 python scripts/beautify_ppt.py source.pptx output.pptx --theme tech
+
+# Full enhancement with all features
+python scripts/beautify_ppt.py source.pptx output.pptx --theme elegant --gradient-bg --smart-icons
+
+# Conservative approach (colors/fonts only)
+python scripts/beautify_ppt.py source.pptx output.pptx --theme minimal --no-restructure
 ```
 
 > **判断是否加 `--no-restructure`：** 源文件已有精心排版（SmartArt、多列、自定义占位符）或只想换配色/字体而不改版式时，加上此 flag；纯文字简单布局时不加（默认自动丰富）。详见 [beautify_ppt.py 说明](#beautify_pptpy)。
 
-Flags:
-- `--theme NAME` — theme name from table above (default: auto-detect from content)
-- `--keep-images` — preserve original images (default: True)
-- `--font-pair PAIR` — override font pairing (e.g., "georgia-calibri")
-- `--no-restructure` — skip layout enrichment (only change colors/fonts)
+**All Available Flags:**
+| Flag | Description |
+|------|-------------|
+| `--theme NAME` | Theme name (default: auto-detect from content) |
+| `--dark-mode` | Force dark background on all slides |
+| `--keep-images` | Preserve original images (default: True) |
+| `--font-pair PAIR` | Override font pairing (e.g., "georgia-calibri") |
+| `--no-restructure` | Skip layout enrichment (only change colors/fonts) |
+| `--no-image-enhance` | Skip image enhancement (rounded corners, shadows, borders) |
+| `--gradient-bg` | Use gradient backgrounds for title/section slides |
+| `--smart-icons` | Auto-insert icons based on content keywords |
+| `--verbose` | Show detailed processing information |
+| `--list-themes` | Display all available themes and exit |
 
 **Step 4 — Review and iterate**
 

@@ -1,21 +1,31 @@
 """Beautify a PPT by redesigning its visual style while preserving content.
 
-Analyzes the source presentation and applies a professional theme:
-- Replaces colors with a cohesive palette
-- Improves font hierarchy
-- Adds visual structure (background shapes, accent bars)
-- Varies slide layouts for visual interest
-- Removes common anti-patterns (accent lines under titles, etc.)
-- Restructures text-heavy single-column slides into visually richer layouts
+Analyzes the source presentation and applies a professional theme with
+enhanced visual features including 12 themes, 10 layout variants,
+smart image enhancement, and auto icon insertion.
+
+Features:
+- 12 professional themes with cohesive color palettes
+- 10 layout variants (auto-rotated for visual variety)
+- Smart image enhancement (rounded corners, shadows, borders)
+- Dynamic font sizing based on content density
+- Gradient backgrounds for title slides
+- Smart icon insertion based on keywords
+- Paragraph spacing optimization
 
 Usage:
     python scripts/beautify_ppt.py source.pptx output.pptx
     python scripts/beautify_ppt.py source.pptx output.pptx --theme tech
-    python scripts/beautify_ppt.py source.pptx output.pptx --theme executive --dark-mode
-    python scripts/beautify_ppt.py source.pptx output.pptx --theme creative --verbose
+    python scripts/beautify_ppt.py source.pptx output.pptx --theme elegant --gradient-bg
+    python scripts/beautify_ppt.py source.pptx output.pptx --theme modern --smart-icons
+    python scripts/beautify_ppt.py source.pptx output.pptx --theme sunset --gradient-bg --smart-icons
     python scripts/beautify_ppt.py source.pptx output.pptx --no-restructure  # skip layout changes
 
-Available themes: executive, tech, creative, warm, minimal, bold, nature, ocean
+Available themes: executive, tech, creative, warm, minimal, bold, nature, ocean,
+                  elegant, modern, sunset, forest
+
+Layout variants: accent_bar, numbered_list, stat_highlight, two_tone, header_band,
+                 card_grid, timeline, split_diagonal, image_focus, quote_block
 """
 
 import argparse
@@ -82,6 +92,8 @@ THEMES = {
         "title_size": 4000,       # 40pt in hundredths
         "body_size": 1800,        # 18pt
         "caption_size": 1200,     # 12pt
+        "gradient_start": "1E2761",
+        "gradient_end": "2A3A7C",
     },
     "tech": {
         "name": "Tech",
@@ -99,6 +111,8 @@ THEMES = {
         "title_size": 3800,
         "body_size": 1800,
         "caption_size": 1200,
+        "gradient_start": "028090",
+        "gradient_end": "02C39A",
     },
     "creative": {
         "name": "Creative",
@@ -116,6 +130,8 @@ THEMES = {
         "title_size": 4000,
         "body_size": 1800,
         "caption_size": 1200,
+        "gradient_start": "F96167",
+        "gradient_end": "F9E795",
     },
     "warm": {
         "name": "Warm",
@@ -133,6 +149,8 @@ THEMES = {
         "title_size": 3800,
         "body_size": 1800,
         "caption_size": 1200,
+        "gradient_start": "B85042",
+        "gradient_end": "D4685A",
     },
     "minimal": {
         "name": "Minimal",
@@ -150,6 +168,8 @@ THEMES = {
         "title_size": 4000,
         "body_size": 1800,
         "caption_size": 1200,
+        "gradient_start": "36454F",
+        "gradient_end": "4A5A65",
     },
     "bold": {
         "name": "Bold",
@@ -167,6 +187,8 @@ THEMES = {
         "title_size": 4400,
         "body_size": 1800,
         "caption_size": 1200,
+        "gradient_start": "990011",
+        "gradient_end": "B81A2C",
     },
     "nature": {
         "name": "Nature",
@@ -184,6 +206,8 @@ THEMES = {
         "title_size": 4000,
         "body_size": 1800,
         "caption_size": 1200,
+        "gradient_start": "2C5F2D",
+        "gradient_end": "4A7F4B",
     },
     "ocean": {
         "name": "Ocean",
@@ -201,6 +225,87 @@ THEMES = {
         "title_size": 4000,
         "body_size": 1800,
         "caption_size": 1200,
+        "gradient_start": "065A82",
+        "gradient_end": "1C7293",
+    },
+    # ═══════════════════════════════════════════════════════════════════════
+    # NEW THEMES - Enhanced Visual Appeal
+    # ═══════════════════════════════════════════════════════════════════════
+    "elegant": {
+        "name": "Elegant",
+        "primary": "2C3E50",      # Deep slate blue
+        "secondary": "E8E8E8",    # Light silver
+        "accent": "E74C3C",       # Coral red
+        "bg_light": "FAFAFA",     # Soft white
+        "bg_dark": "1A1A2E",      # Midnight
+        "text_on_dark": "FFFFFF",
+        "text_on_light": "2C3E50",
+        "text_muted": "7F8C8D",
+        "header_font": "Georgia",
+        "body_font": "Calibri",
+        "title_bold": True,
+        "title_size": 4200,
+        "body_size": 1800,
+        "caption_size": 1200,
+        "gradient_start": "2C3E50",
+        "gradient_end": "34495E",
+    },
+    "modern": {
+        "name": "Modern",
+        "primary": "6C5CE7",      # Soft purple
+        "secondary": "A29BFE",    # Light lavender
+        "accent": "FD79A8",       # Pink
+        "bg_light": "F8F9FA",     # Very light gray
+        "bg_dark": "2D3436",      # Dark charcoal
+        "text_on_dark": "FFFFFF",
+        "text_on_light": "2D3436",
+        "text_muted": "636E72",
+        "header_font": "Segoe UI",
+        "body_font": "Segoe UI",
+        "title_bold": True,
+        "title_size": 4000,
+        "body_size": 1800,
+        "caption_size": 1200,
+        "gradient_start": "6C5CE7",
+        "gradient_end": "A29BFE",
+    },
+    "sunset": {
+        "name": "Sunset",
+        "primary": "E17055",      # Burnt orange
+        "secondary": "FDCB6E",    # Warm yellow
+        "accent": "D63031",       # Deep red
+        "bg_light": "FFF9F0",     # Creamy white
+        "bg_dark": "2D142C",      # Deep plum
+        "text_on_dark": "FFFFFF",
+        "text_on_light": "2D142C",
+        "text_muted": "8B7355",
+        "header_font": "Georgia",
+        "body_font": "Calibri",
+        "title_bold": True,
+        "title_size": 4000,
+        "body_size": 1800,
+        "caption_size": 1200,
+        "gradient_start": "E17055",
+        "gradient_end": "FDCB6E",
+    },
+    "forest": {
+        "name": "Forest",
+        "primary": "1B4332",      # Deep forest
+        "secondary": "52B788",    # Sage green
+        "accent": "D8F3DC",       # Pale mint
+        "bg_light": "F1F8E9",     # Very pale green
+        "bg_dark": "081C15",      # Deep jungle
+        "text_on_dark": "FFFFFF",
+        "text_on_light": "1B4332",
+        "text_muted": "52796F",
+        "header_font": "Cambria",
+        "body_font": "Calibri",
+        "title_bold": True,
+        "title_size": 4000,
+        "body_size": 1800,
+        "caption_size": 1200,
+        "gradient_start": "1B4332",
+        "gradient_end": "2D6A4F",
     },
 }
 
@@ -217,6 +322,9 @@ def beautify_ppt(
     font_pair: Optional[str] = None,
     restructure: bool = True,
     verbose: bool = False,
+    enhance_images: bool = True,
+    use_gradient: bool = False,
+    smart_icons: bool = False,
 ) -> None:
     """Redesign a PPT's visual style while preserving content."""
 
@@ -300,12 +408,18 @@ def beautify_ppt(
             )
             layout_streak.append(layout_variant)
 
+            # Smart icon insertion based on content
+            if smart_icons and body_items:
+                body_items = _insert_smart_icons(body_items, theme)
+
             _beautify_slide(
                 slide_path, theme, use_dark, slide_type, dark_mode,
                 layout_variant=layout_variant,
                 body_items=body_items,
                 restructure=restructure,
                 verbose=verbose,
+                enhance_images=enhance_images,
+                use_gradient=use_gradient,
             )
 
         # Apply theme to slide master/layouts
@@ -335,6 +449,11 @@ LAYOUT_VARIANTS = [
     "stat_highlight",   # First bullet promoted to large stat callout
     "two_tone",         # Left colored panel (40%) + right content (60%)
     "header_band",      # Thick colored top band with title, clean body below
+    "card_grid",        # Cards layout for multiple items
+    "timeline",         # Timeline layout for sequential content
+    "split_diagonal",   # Diagonal split layout
+    "image_focus",      # Large image area with text overlay
+    "quote_block",      # Quote/callout centered layout
 ]
 
 
@@ -407,6 +526,16 @@ def _restructure_slide(xml: str, theme: dict, layout_variant: str,
         xml = _add_numbered_circles(xml, primary, body_items, theme)
     elif layout_variant == "stat_highlight":
         xml = _add_stat_highlight(xml, primary, accent, body_items, theme)
+    elif layout_variant == "card_grid":
+        xml = _add_card_grid(xml, primary, accent, body_items, theme, use_dark)
+    elif layout_variant == "timeline":
+        xml = _add_timeline(xml, primary, accent, body_items, theme)
+    elif layout_variant == "split_diagonal":
+        xml = _add_split_diagonal(xml, primary, secondary, use_dark, theme)
+    elif layout_variant == "image_focus":
+        xml = _add_image_focus_frame(xml, primary, theme)
+    elif layout_variant == "quote_block":
+        xml = _add_quote_block(xml, primary, accent, body_items, theme, use_dark)
     # accent_bar is handled by _add_accent_bar (already exists)
 
     return xml
@@ -562,6 +691,357 @@ def _add_stat_highlight(xml: str, primary: str, accent: str,
     return xml
 
 
+def _add_card_grid(xml: str, primary: str, accent: str,
+                   body_items: List[str], theme: dict, use_dark: bool) -> str:
+    """Add card-style grid layout for multiple content items."""
+    if not body_items or len(body_items) < 2:
+        return xml
+
+    # Limit to 4 cards max for visual clarity
+    count = min(len(body_items), 4)
+    cards_per_row = 2 if count > 2 else count
+    rows = (count + cards_per_row - 1) // cards_per_row
+
+    # Card dimensions
+    card_width = 3200400    # 3.5"
+    card_height = 1371600   # 1.5"
+    gap = 228600            # 0.25"
+    start_x = 914400        # 1"
+    start_y = 1371600       # 1.5"
+
+    bg_color = theme.get("bg_light", "FFFFFF") if not use_dark else theme.get("bg_dark", "1A1A2E")
+    text_color = theme.get("text_on_light", "000000") if not use_dark else theme.get("text_on_dark", "FFFFFF")
+
+    cards_xml = ""
+    for idx in range(count):
+        row = idx // cards_per_row
+        col = idx % cards_per_row
+        cx = start_x + col * (card_width + gap)
+        cy = start_y + row * (card_height + gap)
+
+        # Alternate colors for visual interest
+        card_color = primary if idx % 2 == 0 else accent
+        # If accent is too light for dark mode, use primary
+        if use_dark and card_color == accent:
+            card_color = primary
+
+        item_text = body_items[idx][:40] if idx < len(body_items) else ""
+
+        cards_xml += (
+            f'\n<p:sp>'
+            f'<p:nvSpPr>'
+            f'<p:cNvPr id="{9040 + idx}" name="Card{idx}"/>'
+            f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+            f'<p:nvPr/>'
+            f'</p:nvSpPr>'
+            f'<p:spPr>'
+            f'<a:xfrm><a:off x="{cx}" y="{cy}"/>'
+            f'<a:ext cx="{card_width}" cy="{card_height}"/></a:xfrm>'
+            f'<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 10000"/></a:avLst></a:prstGeom>'
+            f'<a:solidFill><a:srgbClr val="{card_color}"><a:alpha val="15000"/></a:srgbClr></a:solidFill>'
+            f'<a:ln><a:solidFill><a:srgbClr val="{card_color}"/></a:solidFill></a:ln>'
+            f'</p:spPr>'
+            f'<p:txBody>'
+            f'<a:bodyPr anchor="ctr" wrap="square"/>'
+            f'<a:lstStyle/>'
+            f'<a:p><a:pPr algn="ctr"/>'
+            f'<a:r><a:rPr lang="zh-CN" sz="1600" b="1" dirty="0">'
+            f'<a:solidFill><a:srgbClr val="{text_color}"/></a:solidFill>'
+            f'</a:rPr><a:t>{item_text}</a:t></a:r>'
+            f'</a:p>'
+            f'</p:txBody>'
+            f'</p:sp>'
+        )
+
+    if "</p:spTree>" in xml and "Card0" not in xml:
+        xml = xml.replace("</p:spTree>", cards_xml + "</p:spTree>")
+
+    return xml
+
+
+def _add_timeline(xml: str, primary: str, accent: str,
+                  body_items: List[str], theme: dict) -> str:
+    """Add timeline layout for sequential content."""
+    if not body_items or len(body_items) < 2:
+        return xml
+
+    count = min(len(body_items), 5)
+    timeline_y = 2286000    # 2.5"
+    start_x = 685800        # 0.75"
+    end_x = 8458200         # 9.25"
+    step = (end_x - start_x) // (count - 1) if count > 1 else 0
+
+    timeline_xml = (
+        # Horizontal line
+        f'\n<p:sp>'
+        f'<p:nvSpPr>'
+        f'<p:cNvPr id="9050" name="TimelineLine"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+        f'<p:nvPr/>'
+        f'</p:nvSpPr>'
+        f'<p:spPr>'
+        f'<a:xfrm><a:off x="{start_x}" y="{timeline_y}"/>'
+        f'<a:ext cx="{end_x - start_x}" cy="76200"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr>'
+        f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        f'</p:sp>'
+    )
+
+    # Timeline nodes
+    for idx in range(count):
+        cx = start_x + idx * step
+        item_text = body_items[idx][:25] if idx < len(body_items) else ""
+
+        timeline_xml += (
+            # Node circle
+            f'\n<p:sp>'
+            f'<p:nvSpPr>'
+            f'<p:cNvPr id="{9060 + idx}" name="TimelineNode{idx}"/>'
+            f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+            f'<p:nvPr/>'
+            f'</p:nvSpPr>'
+            f'<p:spPr>'
+            f'<a:xfrm><a:off x="{cx - 228600}" y="{timeline_y - 190500}"/>'
+            f'<a:ext cx="457200" cy="457200"/></a:xfrm>'
+            f'<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
+            f'<a:solidFill><a:srgbClr val="{accent}"/></a:solidFill>'
+            f'<a:ln><a:solidFill><a:srgbClr val="{primary}"/></a:solidFill></a:ln>'
+            f'</p:spPr>'
+            f'<p:txBody>'
+            f'<a:bodyPr anchor="ctr"/>'
+            f'<a:lstStyle/>'
+            f'<a:p><a:pPr algn="ctr"/>'
+            f'<a:r><a:rPr lang="en-US" sz="1400" b="1" dirty="0">'
+            f'<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>'
+            f'</a:rPr><a:t>{idx + 1}</a:t></a:r>'
+            f'</a:p>'
+            f'</p:txBody>'
+            f'</p:sp>'
+            # Label below
+            f'\n<p:sp>'
+            f'<p:nvSpPr>'
+            f'<p:cNvPr id="{9070 + idx}" name="TimelineLabel{idx}"/>'
+            f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+            f'<p:nvPr/>'
+            f'</p:nvSpPr>'
+            f'<p:spPr>'
+            f'<a:xfrm><a:off x="{cx - 457200}" y="{timeline_y + 685800}"/>'
+            f'<a:ext cx="914400" cy="457200"/></a:xfrm>'
+            f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+            f'<a:noFill/>'
+            f'<a:ln><a:noFill/></a:ln>'
+            f'</p:spPr>'
+            f'<p:txBody>'
+            f'<a:bodyPr anchor="ctr" wrap="square"/>'
+            f'<a:lstStyle/>'
+            f'<a:p><a:pPr algn="ctr"/>'
+            f'<a:r><a:rPr lang="zh-CN" sz="1200" dirty="0">'
+            f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+            f'</a:rPr><a:t>{item_text}</a:t></a:r>'
+            f'</a:p>'
+            f'</p:txBody>'
+            f'</p:sp>'
+        )
+
+    if "</p:spTree>" in xml and "TimelineLine" not in xml:
+        xml = xml.replace("</p:spTree>", timeline_xml + "</p:spTree>")
+
+    return xml
+
+
+def _add_split_diagonal(xml: str, primary: str, secondary: str,
+                        use_dark: bool, theme: dict) -> str:
+    """Add diagonal split layout."""
+    # Create a diagonal shape using a polygon
+    diagonal_xml = (
+        '\n<p:sp>'
+        '<p:nvSpPr>'
+        '<p:cNvPr id="9080" name="DiagonalSplit"/>'
+        '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+        '<p:nvPr/>'
+        '</p:nvSpPr>'
+        '<p:spPr>'
+        '<a:xfrm><a:off x="0" y="0"/>'
+        '<a:ext cx="9144000" cy="5143500"/></a:xfrm>'
+        '<a:custGeom>'
+        '<a:avLst/>'
+        '<a:gdLst>'
+        '<a:gd name="x1" fmla="val 0"/>'
+        '<a:gd name="y1" fmla="val 0"/>'
+        '<a:gd name="x2" fmla="val 4572000"/>'
+        '<a:gd name="y2" fmla="val 0"/>'
+        '<a:gd name="x3" fmla="val 9144000"/>'
+        '<a:gd name="y3" fmla="val 5143500"/>'
+        '<a:gd name="x4" fmla="val 0"/>'
+        '<a:gd name="y4" fmla="val 5143500"/>'
+        '</a:gdLst>'
+        '<a:pathLst>'
+        '<a:path w="9144000" h="5143500">'
+        '<a:moveTo><a:pt x="x1" y="y1"/></a:moveTo>'
+        '<a:lnTo><a:pt x="x2" y="y2"/></a:lnTo>'
+        '<a:lnTo><a:pt x="x3" y="y3"/></a:lnTo>'
+        '<a:lnTo><a:pt x="x4" y="y4"/></a:lnTo>'
+        '<a:close/>'
+        '</a:path>'
+        '</a:pathLst>'
+        '</a:custGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"><a:alpha val="20000"/></a:srgbClr></a:solidFill>'
+        '<a:ln><a:noFill/></a:ln>'
+        '</p:spPr>'
+        '<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        '</p:sp>'
+    )
+
+    if "</p:spTree>" in xml and "DiagonalSplit" not in xml:
+        xml = xml.replace("<p:spTree>", "<p:spTree>" + diagonal_xml, 1)
+
+    return xml
+
+
+def _add_image_focus_frame(xml: str, primary: str, theme: dict) -> str:
+    """Add decorative frame for image-focused slides."""
+    # Create a subtle border frame
+    frame_xml = (
+        '\n<p:sp>'
+        '<p:nvSpPr>'
+        '<p:cNvPr id="9090" name="ImageFrame"/>'
+        '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+        '<p:nvPr/>'
+        '</p:nvSpPr>'
+        '<p:spPr>'
+        '<a:xfrm><a:off x="457200" y="457200"/>'
+        '<a:ext cx="8229600" cy="4229100"/></a:xfrm>'
+        '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        '<a:noFill/>'
+        f'<a:ln w="76200"><a:solidFill><a:srgbClr val="{primary}"/></a:solidFill></a:ln>'
+        '</p:spPr>'
+        '<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        '</p:sp>'
+        # Corner accents
+        f'\n<p:sp>'
+        f'<p:nvSpPr>'
+        f'<p:cNvPr id="9091" name="CornerTL"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+        f'<p:nvPr/>'
+        f'</p:nvSpPr>'
+        f'<p:spPr>'
+        f'<a:xfrm><a:off x="457200" y="457200"/>'
+        f'<a:ext cx="228600" cy="228600"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr>'
+        f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        f'</p:sp>'
+        f'\n<p:sp>'
+        f'<p:nvSpPr>'
+        f'<p:cNvPr id="9092" name="CornerBR"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+        f'<p:nvPr/>'
+        f'</p:nvSpPr>'
+        f'<p:spPr>'
+        f'<a:xfrm><a:off x="8458200" y="4229100"/>'
+        f'<a:ext cx="228600" cy="228600"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr>'
+        f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        f'</p:sp>'
+    )
+
+    if "</p:spTree>" in xml and "ImageFrame" not in xml:
+        xml = xml.replace("</p:spTree>", frame_xml + "</p:spTree>")
+
+    return xml
+
+
+def _add_quote_block(xml: str, primary: str, accent: str,
+                     body_items: List[str], theme: dict, use_dark: bool) -> str:
+    """Add decorative quote/callout block layout."""
+    if not body_items:
+        return xml
+
+    quote_text = body_items[0][:80] if body_items else ""
+    bg_color = theme.get("bg_light", "FFFFFF") if not use_dark else theme.get("bg_dark", "1A1A2E")
+    text_color = theme.get("text_on_light", "000000") if not use_dark else theme.get("text_on_dark", "FFFFFF")
+
+    quote_xml = (
+        # Left accent bar
+        f'\n<p:sp>'
+        f'<p:nvSpPr>'
+        f'<p:cNvPr id="9100" name="QuoteBar"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+        f'<p:nvPr/>'
+        f'</p:nvSpPr>'
+        f'<p:spPr>'
+        f'<a:xfrm><a:off x="1371600" y="1371600"/>'
+        f'<a:ext cx="114300" cy="2746380"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{accent}"/></a:solidFill>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr>'
+        f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        f'</p:sp>'
+        # Quote mark
+        f'\n<p:sp>'
+        f'<p:nvSpPr>'
+        f'<p:cNvPr id="9101" name="QuoteMark"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+        f'<p:nvPr/>'
+        f'</p:nvSpPr>'
+        f'<p:spPr>'
+        f'<a:xfrm><a:off x="914400" y="1143000"/>'
+        f'<a:ext cx="457200" cy="457200"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:noFill/>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr>'
+        f'<p:txBody>'
+        f'<a:bodyPr anchor="ctr"/>'
+        f'<a:lstStyle/>'
+        f'<a:p><a:pPr algn="ctr"/>'
+        f'<a:r><a:rPr lang="en-US" sz="4800" i="1" dirty="0">'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        f'</a:rPr><a:t>"</a:t></a:r>'
+        f'</a:p>'
+        f'</p:txBody>'
+        f'</p:sp>'
+        # Quote text box
+        f'\n<p:sp>'
+        f'<p:nvSpPr>'
+        f'<p:cNvPr id="9102" name="QuoteText"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+        f'<p:nvPr/>'
+        f'</p:nvSpPr>'
+        f'<p:spPr>'
+        f'<a:xfrm><a:off x="1600200" y="1600200"/>'
+        f'<a:ext cx="5943600" cy="2286000"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:noFill/>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr>'
+        f'<p:txBody>'
+        f'<a:bodyPr anchor="ctr" wrap="square"/>'
+        f'<a:lstStyle/>'
+        f'<a:p><a:pPr algn="l"/>'
+        f'<a:r><a:rPr lang="zh-CN" sz="2000" i="1" dirty="0">'
+        f'<a:solidFill><a:srgbClr val="{text_color}"/></a:solidFill>'
+        f'</a:rPr><a:t>{quote_text}</a:t></a:r>'
+        f'</a:p>'
+        f'</p:txBody>'
+        f'</p:sp>'
+    )
+
+    if "</p:spTree>" in xml and "QuoteBar" not in xml:
+        xml = xml.replace("</p:spTree>", quote_xml + "</p:spTree>")
+
+    return xml
+
+
 def _beautify_slide(
     slide_path: Path,
     theme: dict,
@@ -572,12 +1052,17 @@ def _beautify_slide(
     body_items: Optional[List[str]] = None,
     restructure: bool = True,
     verbose: bool = False,
+    enhance_images: bool = True,
+    use_gradient: bool = False,
 ) -> None:
     """Apply theme to a single slide XML file."""
     xml = slide_path.read_text(encoding="utf-8")
 
-    # 1. Set background
-    xml = _set_background(xml, theme, use_dark)
+    # 1. Set background (with optional gradient)
+    if use_gradient and slide_type in ("title", "section", "conclusion"):
+        xml = _set_gradient_background(xml, theme, use_dark)
+    else:
+        xml = _set_background(xml, theme, use_dark)
 
     # 2. Update text colors for contrast
     xml = _update_text_colors(xml, theme, use_dark)
@@ -588,21 +1073,28 @@ def _beautify_slide(
     # 4. Update font faces
     xml = _update_fonts(xml, theme)
 
-    # 5. Update font sizes for hierarchy
-    xml = _update_font_sizes(xml, theme, slide_type)
+    # 5. Update font sizes for hierarchy (with smart scaling)
+    xml = _update_font_sizes_smart(xml, theme, slide_type, body_items)
 
     # 6. Remove anti-patterns
     xml = _remove_antipatterns(xml)
 
-    # 7. Structural layout enrichment (NEW)
+    # 7. Enhance images (rounded corners, shadows, borders)
+    if enhance_images:
+        xml = _enhance_images(xml, theme, use_dark)
+
+    # 8. Structural layout enrichment
     if restructure and slide_type in ("content", "list_content", "agenda"):
         if layout_variant and layout_variant not in ("none", "accent_bar"):
             xml = _restructure_slide(xml, theme, layout_variant, body_items or [], use_dark)
 
-    # 8. Add visual accent for content slides
+    # 9. Add visual accent for content slides
     if slide_type in ("content", "list_content", "agenda") and not use_dark:
         if layout_variant in ("accent_bar", "none") or not restructure:
             xml = _add_accent_bar(xml, theme)
+
+    # 10. Optimize paragraph spacing
+    xml = _optimize_paragraph_spacing(xml, theme)
 
     slide_path.write_text(xml, encoding="utf-8")
 
@@ -633,6 +1125,264 @@ def _set_background(xml: str, theme: dict, use_dark: bool) -> str:
         xml = re.sub(r'(<p:cSld[^>]*>)', r'\1' + bg_xml, xml, count=1)
 
     return xml
+
+
+def _set_gradient_background(xml: str, theme: dict, use_dark: bool) -> str:
+    """Set a gradient background for visual interest."""
+    start_color = theme.get("gradient_start", theme["primary"])
+    end_color = theme.get("gradient_end", theme["secondary"])
+
+    # Create gradient fill
+    gradient_xml = (
+        f'\n  <p:bg>'
+        f'<p:bgPr>'
+        f'<a:gradFill rotWithShape="1">'
+        f'<a:gsLst>'
+        f'<a:gs pos="0"><a:srgbClr val="{start_color}"/></a:gs>'
+        f'<a:gs pos="100000"><a:srgbClr val="{end_color}"/></a:gs>'
+        f'</a:gsLst>'
+        f'<a:lin ang="2700000" scaled="1"/>'  # Top to bottom gradient
+        f'<a:tileRect/>'
+        f'</a:gradFill>'
+        f'<a:effectLst/>'
+        f'</p:bgPr>'
+        f'</p:bg>'
+    )
+
+    if "<p:bg>" in xml:
+        # Replace existing background
+        xml = re.sub(r'<p:bg>.*?</p:bg>', gradient_xml.strip(), xml, flags=re.DOTALL)
+    else:
+        xml = re.sub(r'(<p:cSld[^>]*>)', r'\1' + gradient_xml, xml, count=1)
+
+    return xml
+
+
+def _enhance_images(xml: str, theme: dict, use_dark: bool) -> str:
+    """Enhance images with rounded corners, shadows, and borders."""
+    primary = theme["primary"]
+
+    def enhance_pic(m):
+        pic_xml = m.group(0)
+
+        # Check if this is actually an image (blip fill)
+        if "<a:blip" not in pic_xml:
+            return pic_xml
+
+        # Add rounded corners to the shape
+        if '<a:prstGeom prst="rect"' in pic_xml:
+            # Replace rect with roundRect
+            pic_xml = pic_xml.replace(
+                '<a:prstGeom prst="rect"><a:avLst/>',
+                '<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 10000"/></a:avLst>'
+            )
+
+        # Add subtle shadow effect
+        if '<a:effectLst>' not in pic_xml and '<p:spPr>' in pic_xml:
+            shadow_xml = (
+                '<a:effectLst>'
+                '<a:outerShdw blurRad="63500" dist="50800" dir="2700000" algn="bl">'
+                '<a:srgbClr val="000000"><a:alpha val="25000"/></a:srgbClr>'
+                '</a:outerShdw>'
+                '</a:effectLst>'
+            )
+            # Insert before closing spPr
+            pic_xml = pic_xml.replace('</p:spPr>', shadow_xml + '</p:spPr>')
+
+        # Add subtle border
+        if '<a:ln>' not in pic_xml and '<p:spPr>' in pic_xml:
+            border_xml = (
+                f'<a:ln w="12700">'
+                f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+                f'</a:ln>'
+            )
+            pic_xml = pic_xml.replace('</p:spPr>', border_xml + '</p:spPr>')
+
+        return pic_xml
+
+    xml = re.sub(r'<p:pic>.*?</p:pic>', enhance_pic, xml, flags=re.DOTALL)
+    return xml
+
+
+def _update_font_sizes_smart(xml: str, theme: dict, slide_type: str,
+                              body_items: Optional[List[str]]) -> str:
+    """Smart font sizing based on content length and slide type."""
+    # First apply basic font size updates
+    xml = _update_font_sizes(xml, theme, slide_type)
+
+    # Calculate content density for dynamic sizing
+    content_length = sum(len(item) for item in (body_items or []))
+    item_count = len(body_items) if body_items else 0
+
+    # Adjust body font size based on content density
+    if content_length > 300 or item_count > 6:
+        # High density - reduce font size slightly
+        target_size = theme["body_size"] - 200  # 2pt smaller
+    elif content_length < 100 and item_count <= 3:
+        # Low density - can increase font size
+        target_size = theme["body_size"] + 100  # 1pt larger
+    else:
+        target_size = theme["body_size"]
+
+    def adjust_body_size(m):
+        sp_xml = m.group(0)
+        # Skip title placeholders
+        if re.search(r'<p:ph[^>]*type="(?:title|ctrTitle)"', sp_xml):
+            return sp_xml
+
+        def fix_sz(sm):
+            sz = int(sm.group(1))
+            # Only adjust if within body text range
+            if 1400 <= sz <= 2200:
+                return f'sz="{target_size}"'
+            return sm.group(0)
+
+        return re.sub(r'sz="(\d+)"', fix_sz, sp_xml)
+
+    xml = re.sub(r'<p:sp\b.*?</p:sp>', adjust_body_size, xml, flags=re.DOTALL)
+    return xml
+
+
+def _optimize_paragraph_spacing(xml: str, theme: dict) -> str:
+    """Optimize paragraph spacing for better readability."""
+    # Add line spacing to paragraphs
+    def add_spacing(m):
+        p_xml = m.group(0)
+
+        # Skip if already has spacing
+        if '<a:lnSpc' in p_xml:
+            return p_xml
+
+        # Add 1.2 line spacing (120%)
+        spacing_xml = '<a:lnSpc><a:spcPct val="120000"/></a:lnSpc>'
+
+        # Insert after pPr or at the beginning of the paragraph
+        if '<a:pPr' in p_xml:
+            p_xml = p_xml.replace('</a:pPr>', spacing_xml + '</a:pPr>')
+        else:
+            p_xml = p_xml.replace('<a:p>', '<a:p><a:pPr>' + spacing_xml + '</a:pPr>')
+
+        return p_xml
+
+    # Only apply to body text paragraphs (not titles)
+    xml = re.sub(r'<a:p>.*?</a:p>', add_spacing, xml, flags=re.DOTALL)
+    return xml
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SMART ICON SYSTEM
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Keyword to icon mapping (using Unicode symbols as fallback)
+ICON_KEYWORDS = {
+    # Business & Strategy
+    "growth": "📈",
+    "increase": "📈",
+    "revenue": "💰",
+    "profit": "💵",
+    "money": "💵",
+    "cost": "💸",
+    "budget": "📊",
+    "finance": "📊",
+    "investment": "📈",
+    "market": "🏪",
+    "customer": "👥",
+    "client": "👤",
+    "user": "👤",
+    "team": "👥",
+    "people": "👥",
+    "partner": "🤝",
+    "collaboration": "🤝",
+    # Technology
+    "technology": "💻",
+    "tech": "💻",
+    "digital": "🔌",
+    "software": "💿",
+    "app": "📱",
+    "mobile": "📱",
+    "data": "📊",
+    "analytics": "📈",
+    "ai": "🤖",
+    "automation": "⚙️",
+    "cloud": "☁️",
+    "security": "🔒",
+    "privacy": "🔐",
+    # Goals & Success
+    "goal": "🎯",
+    "target": "🎯",
+    "success": "🏆",
+    "achievement": "🏆",
+    "win": "🏆",
+    "milestone": "🚩",
+    "launch": "🚀",
+    "start": "🚀",
+    "begin": "🚀",
+    # Time & Process
+    "time": "⏰",
+    "deadline": "⏰",
+    "schedule": "📅",
+    "plan": "📋",
+    "process": "🔄",
+    "workflow": "🔄",
+    "step": "👣",
+    "phase": "🔄",
+    # Quality & Innovation
+    "quality": "✨",
+    "innovation": "💡",
+    "idea": "💡",
+    "creative": "🎨",
+    "design": "🎨",
+    "solution": "🔧",
+    "problem": "⚠️",
+    "risk": "⚠️",
+    "warning": "⚠️",
+    # Communication
+    "communication": "💬",
+    "message": "💬",
+    "email": "📧",
+    "phone": "📞",
+    "call": "📞",
+    "meeting": "🤝",
+    "presentation": "📊",
+    # Environment
+    "environment": "🌱",
+    "sustainability": "♻️",
+    "green": "🌿",
+    "eco": "🌍",
+    # Health & Wellness
+    "health": "❤️",
+    "wellness": "🧘",
+    "fitness": "💪",
+    # Education
+    "education": "📚",
+    "learning": "📖",
+    "training": "🎓",
+    "knowledge": "🧠",
+}
+
+
+def _insert_smart_icons(body_items: List[str], theme: dict) -> List[str]:
+    """Insert relevant icons based on content keywords."""
+    enhanced_items = []
+
+    for item in body_items:
+        enhanced_item = item
+        item_lower = item.lower()
+
+        # Find matching icon
+        matched_icon = None
+        for keyword, icon in ICON_KEYWORDS.items():
+            if keyword in item_lower:
+                matched_icon = icon
+                break
+
+        # Add icon if found and not already present
+        if matched_icon and matched_icon not in item:
+            enhanced_item = f"{matched_icon} {item}"
+
+        enhanced_items.append(enhanced_item)
+
+    return enhanced_items
 
 
 def _update_text_colors(xml: str, theme: dict, use_dark: bool) -> str:
@@ -941,8 +1691,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Beautify a PPT by redesigning its visual style"
     )
-    parser.add_argument("source", help="Source PPTX file")
-    parser.add_argument("output", help="Output PPTX file")
     parser.add_argument(
         "--theme",
         choices=list(THEMES.keys()),
@@ -974,9 +1722,34 @@ if __name__ == "__main__":
         help="Verbose output",
     )
     parser.add_argument(
+        "source",
+        nargs="?",
+        help="Source PPTX file",
+    )
+    parser.add_argument(
+        "output",
+        nargs="?",
+        help="Output PPTX file",
+    )
+    parser.add_argument(
         "--list-themes",
         action="store_true",
         help="List available themes and exit",
+    )
+    parser.add_argument(
+        "--no-image-enhance",
+        action="store_true",
+        help="Skip image enhancement (rounded corners, shadows, borders)",
+    )
+    parser.add_argument(
+        "--gradient-bg",
+        action="store_true",
+        help="Use gradient backgrounds for title/section slides",
+    )
+    parser.add_argument(
+        "--smart-icons",
+        action="store_true",
+        help="Auto-insert icons based on content keywords",
     )
     args = parser.parse_args()
 
@@ -987,6 +1760,10 @@ if __name__ == "__main__":
             print(f"               Fonts: {t['header_font']} + {t['body_font']}")
         sys.exit(0)
 
+    # Ensure source and output are provided for normal operation
+    if not args.source or not args.output:
+        parser.error("the following arguments are required: source, output")
+
     beautify_ppt(
         args.source,
         args.output,
@@ -996,4 +1773,7 @@ if __name__ == "__main__":
         font_pair=args.font_pair,
         restructure=not args.no_restructure,
         verbose=args.verbose,
+        enhance_images=not args.no_image_enhance,
+        use_gradient=args.gradient_bg,
+        smart_icons=args.smart_icons,
     )
