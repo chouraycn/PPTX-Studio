@@ -636,59 +636,76 @@ def _set_background(xml: str, theme: dict, use_dark: bool) -> str:
 
 
 def _update_text_colors(xml: str, theme: dict, use_dark: bool) -> str:
-    """Update text run colors to match theme."""
-    # Determine colors based on background
+    """Update text run colors to match the theme palette.
+
+    Strategy:
+    - Title placeholders (type="title" / "ctrTitle") → theme primary (light bg)
+      or text_on_dark (dark bg)
+    - All other text runs that carry an explicit solidFill → theme body color
+    - Runs that inherit color (no solidFill) are left untouched so the master
+      theme inheritance chain works correctly
+    """
     title_color = theme["text_on_dark"] if use_dark else theme["primary"]
-    body_color = theme["text_on_dark"] if use_dark else theme["text_on_light"]
+    body_color  = theme["text_on_dark"] if use_dark else theme["text_on_light"]
 
-    def update_rpr(m):
-        rpr = m.group(0)
-        # Only update if solidFill is present (explicit color), not inherited
-        if "<a:solidFill>" not in rpr and "<a:schemeClr" not in rpr:
-            return rpr
-        # Replace with theme color
-        rpr = re.sub(
-            r'<a:solidFill><a:srgbClr val="[0-9A-Fa-f]{6}"/></a:solidFill>',
-            f'<a:solidFill><a:srgbClr val="{body_color}"/></a:solidFill>',
-            rpr,
-        )
-        return rpr
+    def recolor_sp(m):
+        sp_xml = m.group(0)
+        # Determine if this shape is a title placeholder
+        is_title = bool(re.search(r'<p:ph[^>]*type="(?:title|ctrTitle)"', sp_xml))
+        color = title_color if is_title else body_color
 
-    # Update all run properties that have explicit colors
-    # Replace obvious old colors that are too far from theme
-    bad_colors = ["FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
-                  "808080", "C0C0C0", "000080", "008000", "800000"]
-    for bad in bad_colors:
-        xml = xml.replace(
-            f'<a:srgbClr val="{bad}"/>',
-            f'<a:srgbClr val="{body_color}"/>'
-        )
+        def recolor_rpr(rm):
+            rpr = rm.group(0)
+            # Only recolor runs that already carry an explicit solidFill color;
+            # leave scheme-color references and purely inherited runs alone.
+            if "<a:solidFill>" not in rpr:
+                return rpr
+            # Strip any existing srgbClr / sysClr inside solidFill, replace with theme color
+            new_rpr = re.sub(
+                r'<a:solidFill>.*?</a:solidFill>',
+                f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>',
+                rpr,
+                flags=re.DOTALL,
+            )
+            return new_rpr
 
+        return re.sub(r'<a:rPr\b.*?</a:rPr>', recolor_rpr, sp_xml, flags=re.DOTALL)
+
+    xml = re.sub(r'<p:sp\b.*?</p:sp>', recolor_sp, xml, flags=re.DOTALL)
     return xml
 
 
 def _update_shape_colors(xml: str, theme: dict, use_dark: bool) -> str:
-    """Update accent shape fill colors to theme accent."""
-    # Replace common accent colors with theme primary/accent
-    # This targets shapes that likely serve as design accents
-    # Avoid changing very light or very dark fills (those are often functional)
+    """Update accent shape fill colors to theme accent/primary.
 
+    Skips shapes that serve as functional backgrounds (very light or very dark).
+    Replaces all other solid-fill shapes with the theme accent color so that
+    decorative elements automatically adopt the new palette.
+    """
     accent_color = theme["accent"] if use_dark else theme["primary"]
+    bg_light = theme["bg_light"].upper()
+    bg_dark  = theme["bg_dark"].upper()
 
-    # Pattern: standalone shape fills that are solid and colorful
     def replace_accent(m):
         color = m.group(1).upper()
-        # Skip very light colors (backgrounds), very dark (shadows), and white/black
         r = int(color[0:2], 16)
         g = int(color[2:4], 16)
         b = int(color[4:6], 16)
         luminance = (r + g + b) / 3
-        if luminance > 220 or luminance < 30:
+
+        # Skip pure white / near-white (backgrounds / light fills)
+        if luminance > 235:
             return m.group(0)
-        # Replace with theme accent
+        # Skip pure black / near-black (text shadows, etc.)
+        if luminance < 20:
+            return m.group(0)
+        # Skip the template's own bg colors to avoid color-flipping backgrounds
+        if color in (bg_light, bg_dark):
+            return m.group(0)
+        # Replace everything else with the theme accent
         return f'<a:solidFill><a:srgbClr val="{accent_color}"/></a:solidFill>'
 
-    # Only update spPr fills (shape properties), not text fills
+    # Only update spPr fills (shape properties), not text run fills
     def process_sppr(m):
         sppr = m.group(0)
         sppr = re.sub(

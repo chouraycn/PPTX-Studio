@@ -19,6 +19,7 @@ Options:
     --dry-run         Print what would be merged without writing output
 
 Examples:
+
     # Merge all slides from two files (default order: A1,A2,...,B1,B2,...)
     python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx
 

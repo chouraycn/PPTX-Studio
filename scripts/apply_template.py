@@ -80,17 +80,35 @@ def _run_pack(input_dir: str, output_file: str, original: Optional[str] = None) 
 
 # Layout type priority order for matching
 LAYOUT_TYPE_KEYWORDS = {
-    "title_slide": ["title slide", "title, subtitle", "title only", "ctrTitle"],
-    "section_header": ["section header", "section", "divider", "blank"],
-    "content_slide": ["title and content", "content", "object"],
-    "two_column": ["two content", "comparison", "2 column", "two column"],
-    "image_text": ["picture with caption", "picture", "image", "photo"],
-    "list_content": ["title and content", "content", "bulleted list"],
-    "chart_content": ["title and content", "content"],
-    "table_content": ["title and content", "content"],
-    "quote_slide": ["blank", "title only", "quote"],
-    "conclusion": ["blank", "title only", "title slide"],
-    "full_image": ["blank", "picture"],
+    "title_slide": [
+        "title slide", "title, subtitle", "title only", "ctrtitle",
+        "首页", "封面", "标题幻灯片", "title",
+    ],
+    "section_header": [
+        "section header", "section", "divider", "blank",
+        "章节", "节标题", "过渡页", "section",
+    ],
+    "content_slide": [
+        "title and content", "content", "object",
+        "标题和内容", "内容", "正文",
+    ],
+    "two_column": [
+        "two content", "comparison", "2 column", "two column",
+        "两栏", "双栏", "对比", "比较",
+    ],
+    "image_text": [
+        "picture with caption", "picture", "image", "photo",
+        "图片", "图文", "图像",
+    ],
+    "list_content": [
+        "title and content", "content", "bulleted list",
+        "列表", "要点", "bullet",
+    ],
+    "chart_content": ["title and content", "content", "图表", "chart"],
+    "table_content": ["title and content", "content", "表格", "table"],
+    "quote_slide": ["blank", "title only", "quote", "引用", "金句"],
+    "conclusion": ["blank", "title only", "title slide", "结语", "总结", "谢谢"],
+    "full_image": ["blank", "picture", "全图", "大图"],
 }
 
 
@@ -126,7 +144,11 @@ def apply_template(
     print(f"Analyzing template: {template_pptx}")
 
     template_layouts = _analyze_template_layouts(template_pptx)
+    # Extract template color palette for content injection
+    template_colors = _extract_template_colors(template_pptx)
     if verbose:
+        print(f"Template colors: primary=#{template_colors['primary']}, "
+              f"accent=#{template_colors['accent']}")
         print(f"Template has {len(template_layouts)} layouts:")
         for l in template_layouts:
             print(f"  {l['layout_file']}: {l['layout_name']} ({l['detected_type']})")
@@ -180,6 +202,7 @@ def apply_template(
             unpacked_dir,
             source_images_dir,
             keep_notes,
+            template_colors,
             verbose,
         )
 
@@ -256,20 +279,90 @@ def _analyze_template_layouts(template_pptx: str) -> List[dict]:
     return layouts
 
 
+def _extract_template_colors(template_pptx: str) -> Dict[str, str]:
+    """Extract the primary/accent/background colors from a template's theme XML.
+
+    Returns a dict with keys: primary, secondary, accent, bg_light, bg_dark,
+    text_on_light, text_on_dark.  Falls back to neutral values if not found.
+    """
+    defaults = {
+        "primary":       "1E2761",
+        "secondary":     "CADCFC",
+        "accent":        "C9A84C",
+        "bg_light":      "FFFFFF",
+        "bg_dark":       "1E2761",
+        "text_on_light": "1E2761",
+        "text_on_dark":  "FFFFFF",
+    }
+
+    try:
+        with zipfile.ZipFile(template_pptx, "r") as zf:
+            theme_files = [n for n in zf.namelist()
+                          if n.startswith("ppt/theme/") and n.endswith(".xml")]
+            if not theme_files:
+                return defaults
+
+            xml = zf.read(theme_files[0]).decode("utf-8")
+
+            def _get_color(tag: str) -> Optional[str]:
+                m = re.search(
+                    rf'<a:{tag}>\s*(?:<a:srgbClr val="([0-9A-Fa-f]{{6}})"'
+                    r'|<a:sysClr[^>]*lastClr="([0-9A-Fa-f]{6})")',
+                    xml,
+                )
+                if m:
+                    return (m.group(1) or m.group(2)).upper()
+                return None
+
+            dk1      = _get_color("dk1")   or defaults["text_on_light"]
+            lt1      = _get_color("lt1")   or defaults["bg_light"]
+            accent1  = _get_color("accent1") or defaults["primary"]
+            accent2  = _get_color("accent2") or defaults["secondary"]
+            accent3  = _get_color("accent3") or defaults["accent"]
+            dk2      = _get_color("dk2")   or defaults["bg_dark"]
+
+            return {
+                "primary":       accent1,
+                "secondary":     accent2,
+                "accent":        accent3,
+                "bg_light":      lt1,
+                "bg_dark":       dk2,
+                "text_on_light": dk1,
+                "text_on_dark":  lt1,
+            }
+    except Exception:
+        return defaults
+
+
 def _detect_layout_type(layout_name: str, layout_xml: str) -> str:
-    """Classify a template layout type."""
+    """Classify a template layout type.
+
+    Uses layout name first (case-insensitive, supports Chinese names),
+    then falls back to placeholder type analysis.
+    """
     name_lower = layout_name.lower()
 
     for layout_type, keywords in LAYOUT_TYPE_KEYWORDS.items():
         if any(kw in name_lower for kw in keywords):
             return layout_type
 
-    # Fallback: check placeholder count
+    # Fallback: analyze placeholder types in the layout XML
     ph_types = re.findall(r'<p:ph[^>]*type="([^"]*)"', layout_xml)
+    ph_count = len(re.findall(r'<p:ph\b', layout_xml))
+
     if "ctrTitle" in ph_types:
         return "title_slide"
+    if "subTitle" in ph_types:
+        return "title_slide"
+    # Two body/obj placeholders → two-column
+    body_count = sum(1 for t in ph_types if t in ("body", "obj"))
+    if body_count >= 2:
+        return "two_column"
     if "body" in ph_types or "obj" in ph_types:
         return "content_slide"
+    # No body placeholder at all → section header or blank
+    if ph_count <= 1:
+        return "section_header"
     return "content_slide"
 
 
@@ -510,11 +603,23 @@ def _inject_content_into_slide(
     unpacked_dir: Path,
     slide_file: str,
     source_slide: dict,
+    template_colors: Dict[str, str],
     verbose: bool,
 ) -> None:
-    """Replace placeholder content in a template slide with source content."""
+    """Replace placeholder content in a template slide with source content.
+
+    Colors in injected text follow the template's extracted color palette:
+    - Title text → template primary color (on light bg) or white (on dark bg)
+    - Body text → template text_on_light color
+    - The slide background type (dark vs light) is inferred from the slide XML.
+    """
     slide_path = unpacked_dir / "ppt" / "slides" / slide_file
     slide_xml = slide_path.read_text(encoding="utf-8")
+
+    # Infer background type from existing slide background
+    use_dark = _slide_has_dark_bg(slide_xml, template_colors)
+    title_color = template_colors["text_on_dark"] if use_dark else template_colors["primary"]
+    body_color  = template_colors["text_on_dark"] if use_dark else template_colors["text_on_light"]
 
     title = source_slide.get("title", "")
     subtitle = source_slide.get("subtitle", "")
@@ -522,58 +627,126 @@ def _inject_content_into_slide(
 
     modified = slide_xml
 
-    # Replace title placeholder
+    # Replace title placeholder — strip old color, inject template title color
     if title:
-        modified = _replace_placeholder_text(modified, ["title", "ctrTitle"], title)
+        modified = _replace_placeholder_text(
+            modified, ["title", "ctrTitle"], title, color=title_color
+        )
 
     # Replace subtitle placeholder
     if subtitle:
-        modified = _replace_placeholder_text(modified, ["subTitle"], subtitle)
+        modified = _replace_placeholder_text(
+            modified, ["subTitle"], subtitle, color=body_color
+        )
     elif body and not subtitle:
-        # Use first body line as subtitle if no explicit subtitle
         if source_slide.get("type") == "title":
-            modified = _replace_placeholder_text(modified, ["subTitle"], body[0] if body else "")
+            modified = _replace_placeholder_text(
+                modified, ["subTitle"], body[0] if body else "", color=body_color
+            )
 
     # Replace body/content placeholder with bullet list
     if body:
         if source_slide.get("type") == "title":
-            body_to_use = body[1:] if subtitle else body  # Skip first if used as subtitle
+            body_to_use = body[1:] if subtitle else body
         else:
             body_to_use = body
 
         if body_to_use:
-            body_xml = _build_body_xml(body_to_use)
+            body_xml = _build_body_xml(body_to_use, color=body_color)
             modified = _replace_placeholder_content(modified, ["body", "obj"], body_xml)
 
     slide_path.write_text(modified, encoding="utf-8")
 
 
-def _replace_placeholder_text(slide_xml: str, ph_types: list[str], new_text: str) -> str:
-    """Replace text content in a placeholder while preserving formatting."""
+def _slide_has_dark_bg(slide_xml: str, template_colors: Dict[str, str]) -> bool:
+    """Heuristically determine if a slide has a dark background.
+
+    Checks the explicit <p:bg> background color in the slide XML.
+    Falls back to False (assume light) when not deterministic.
+    """
+    bg_m = re.search(
+        r'<p:bg>.*?<a:srgbClr val="([0-9A-Fa-f]{6})"',
+        slide_xml, re.DOTALL
+    )
+    if bg_m:
+        hex_color = bg_m.group(1).upper()
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        luminance = (r + g + b) / 3
+        return luminance < 128
+
+    # Also check if bg_dark color is present in a solidFill inside the slide
+    bg_dark = template_colors.get("bg_dark", "000000").upper()
+    if bg_dark in slide_xml.upper():
+        return True
+
+    return False
+
+
+def _replace_placeholder_text(
+    slide_xml: str,
+    ph_types: list[str],
+    new_text: str,
+    color: Optional[str] = None,
+) -> str:
+    """Replace text content in a placeholder while applying the template color.
+
+    If *color* is given, all <a:rPr> nodes inside the placeholder will have
+    their solid fill replaced (or added) with that color, ensuring the injected
+    text uses the template palette rather than the source PPT's colors.
+    """
     type_pattern = "|".join(ph_types)
 
     def replace_sp(m):
         sp_xml = m.group(0)
         if not re.search(rf'<p:ph[^>]*type="(?:{type_pattern})"', sp_xml):
             return sp_xml
-        # Replace the text content of the first <a:t> in the placeholder
-        # Keep the first <a:p> structure, replace all text
+
+        # ── Step 1: clear ALL existing <a:p> paragraphs inside <a:txBody>
+        # so old text runs (and their colors) don't linger
+        def clear_txbody(tbm):
+            before = tbm.group(1)   # everything up to and including </a:lstStyle>
+            after  = tbm.group(2)   # closing </a:txBody>
+            # Build a single paragraph with one run
+            rpr_color = (
+                f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+                if color else ""
+            )
+            new_para = (
+                f'<a:p>'
+                f'<a:r><a:rPr lang="zh-CN" dirty="0">{rpr_color}</a:rPr>'
+                f'<a:t>{_escape_xml(new_text)}</a:t></a:r>'
+                f'</a:p>'
+            )
+            return before + new_para + after
+
         new_sp = re.sub(
-            r'(<a:txBody>.*?<a:p[^>]*>.*?<a:r[^>]*>.*?<a:t>)[^<]*(</a:t>)',
-            lambda tm: tm.group(1) + _escape_xml(new_text) + tm.group(2),
+            r'(<a:txBody>.*?</a:lstStyle>)(.*?)(</a:txBody>)',
+            lambda tbm: clear_txbody(tbm),
             sp_xml,
             count=1,
             flags=re.DOTALL,
         )
+
         if new_sp == sp_xml:
-            # If no <a:r> found, inject a basic text run
+            # Fallback: txBody has no lstStyle — inject a minimal run
+            rpr_color = (
+                f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+                if color else ""
+            )
             new_sp = re.sub(
-                r'(<a:txBody>.*?<a:bodyPr[^>]*/?>.*?<a:p[^>]*>)',
-                lambda tm: tm.group(0) + f'<a:r><a:rPr lang="en-US" dirty="0"/><a:t>{_escape_xml(new_text)}</a:t></a:r>',
+                r'(<a:txBody>)',
+                lambda _: (
+                    '<a:txBody>'
+                    '<a:bodyPr/><a:lstStyle/>'
+                    f'<a:p><a:r><a:rPr lang="zh-CN" dirty="0">{rpr_color}</a:rPr>'
+                    f'<a:t>{_escape_xml(new_text)}</a:t></a:r></a:p>'
+                ),
                 sp_xml,
                 count=1,
-                flags=re.DOTALL,
             )
+
         return new_sp
 
     return re.sub(r'<p:sp\b.*?</p:sp>', replace_sp, slide_xml, flags=re.DOTALL)
@@ -600,14 +773,28 @@ def _replace_placeholder_content(slide_xml: str, ph_types: list[str], new_conten
     return re.sub(r'<p:sp\b.*?</p:sp>', replace_sp, slide_xml, flags=re.DOTALL)
 
 
-def _build_body_xml(lines: list[str]) -> str:
-    """Build XML paragraphs from a list of text lines."""
+def _build_body_xml(lines: list[str], color: Optional[str] = None) -> str:
+    """Build XML paragraphs from a list of text lines.
+
+    Each line becomes a bullet paragraph.  If *color* is given, the run
+    property will carry an explicit solidFill so the text uses the template
+    palette rather than inheriting from the source PPT.
+    """
+    rpr_color = (
+        f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+        if color else ""
+    )
     paragraphs = []
     for line in lines:
         escaped = _escape_xml(line)
         paragraphs.append(
-            f'<a:p><a:pPr><a:buChar char="&#x2022;"/></a:pPr>'
-            f'<a:r><a:rPr lang="en-US" dirty="0"/><a:t>{escaped}</a:t></a:r></a:p>'
+            f'<a:p>'
+            f'<a:pPr><a:buChar char="&#x2022;"/></a:pPr>'
+            f'<a:r>'
+            f'<a:rPr lang="zh-CN" dirty="0">{rpr_color}</a:rPr>'
+            f'<a:t>{escaped}</a:t>'
+            f'</a:r>'
+            f'</a:p>'
         )
     return "\n".join(paragraphs)
 
@@ -628,6 +815,7 @@ def _build_new_slides(
     unpacked_dir: Path,
     source_images_dir: Path,
     keep_notes: bool,
+    template_colors: Dict[str, str],
     verbose: bool,
 ) -> List[Tuple[str, str]]:
     """Create all new slides by duplicating template slides and injecting content."""
@@ -656,8 +844,10 @@ def _build_new_slides(
         else:
             new_slide_file, rid = _create_slide_from_layout(unpacked_dir, layout_file)
 
-        # Inject content
-        _inject_content_into_slide(unpacked_dir, new_slide_file, source_slide, verbose)
+        # Inject content with template colors
+        _inject_content_into_slide(
+            unpacked_dir, new_slide_file, source_slide, template_colors, verbose
+        )
 
         if verbose:
             print(f"  Slide {idx}: created {new_slide_file} using layout {layout_file}")
