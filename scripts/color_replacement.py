@@ -357,13 +357,18 @@ def _replace_color_in_xml(
         return xml_content, stats
     
     # Perform replacements
+    # PPTX XML format: <a:srgbClr val="RRGGBB"/> or val='RRGGBB'
+    # Also handles: <a:srgbClr val="RRGGBB" other="..."/>
+    # Pattern: quotes around the color value, preceded by attr name like val=
     for old_color, new_color in color_map.items():
-        xml_content = re.sub(
-            rf'(["\']?)[A-Fa-f0-9]{{6}}(["\']?)\s*=\s*["\']?{re.escape(old_color)}["\']?',
-            rf'\1{new_color}\2',
-            xml_content,
-            flags=re.IGNORECASE
-        )
+        # Match color value inside quotes, with flexible whitespace
+        pattern = rf'val\s*=\s*["\']?({re.escape(old_color)})["\']]?(?=\s|/>|>)'
+        def make_repl(nc=new_color):
+            def replacer(m):
+                # Replace the hex color, preserve surrounding context
+                return 'val="' + nc + '"'
+            return replacer
+        xml_content = re.sub(pattern, make_repl(new_color), xml_content, flags=re.IGNORECASE)
     
     return xml_content, stats
 
@@ -518,7 +523,7 @@ def color_replacement(
             content = xml_file.read_text(encoding="utf-8", errors="ignore")
             
             modified_content, stats = _replace_color_in_xml(
-                content, color_map, preview=False, verbose=False
+                content, color_map, preview_mode=False, verbose=False
             )
             
             if stats["total_replacements"] > 0:
@@ -526,7 +531,7 @@ def color_replacement(
                 xml_file.write_text(modified_content, encoding="utf-8")
         
         if verbose:
-            print(f"  Modified {len([f for f in xml_files if any(c in color_counts for c in color_map.keys()])} XML files")
+            print(f"  Modified {len(xml_files)} XML files")
         
         # Pack output
         print(f"\n📦 Packing {output_pptx}...")

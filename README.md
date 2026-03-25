@@ -2,6 +2,8 @@
 
 一个功能强大的PPT处理工具集，支持PPTX文件的创建、编辑、模板套用、风格美化和演讲者备注生成。
 
+📦 **Source Code**: https://github.com/chouraycn/PPTX-Studio
+
 ## 项目简介
 
 PPTX Studio 是一个专门用于处理Microsoft PowerPoint (.pptx)文件的工具集合。它提供了多种功能，包括：
@@ -251,9 +253,7 @@ A: 建议：
 2. 使用`--original`参数保持与原文件的兼容性
 3. 在打包前检查XML文件的结构
 
-## 许可证
-
-本项目遵循Anthropic的许可证条款。详细信息请参阅[LICENSE.txt](LICENSE.txt)。
+## 贡献
 
 ## 贡献
 
