@@ -49,6 +49,7 @@ import subprocess
 sys.path.insert(0, str(Path(__file__).parent))
 
 from extract_content import extract_content
+from animation_migration import migrate_animations_with_id_mapping
 
 
 def _run_unpack(input_file: str, output_dir: str) -> None:
@@ -121,6 +122,8 @@ def apply_template(
     dry_run: bool = False,
     verbose: bool = False,
     keep_notes: bool = True,
+    skip_animations: bool = False,
+    interactive: bool = False,
 ) -> None:
     """Apply template to source PPT content."""
 
@@ -165,7 +168,9 @@ def apply_template(
             slide_mapping = json.load(f)
         print(f"Using manual mapping from {mapping_file}")
     else:
-        slide_mapping = _auto_map_slides(source_content["slides"], template_layouts, verbose)
+        slide_mapping = _auto_map_slides(
+            source_content["slides"], template_layouts, verbose, interactive
+        )
 
     # ── DRY-RUN: print mapping plan and stop ─────────────────────────────────
     _print_mapping_plan(slide_mapping, source_content["slides"])
@@ -189,6 +194,9 @@ def apply_template(
 
         print(f"\nUnpacking template...")
         _run_unpack(str(template_path), str(unpacked_dir))
+
+        # Ensure slideMasters and themes are preserved from template
+        _ensure_slide_masters_preserved(unpacked_dir, verbose)
 
         # Get template slide structure
         template_slide_order = _get_presentation_slide_order(unpacked_dir)
@@ -223,6 +231,7 @@ def apply_template(
             source_unpacked_dir,
             source_slide_file_map,
             verbose,
+            skip_animations,
         )
 
         # Update presentation.xml with new slide order
@@ -595,8 +604,93 @@ def _generate_toc_content(source_slides: List[dict]) -> dict:
     }
 
 
+def _calculate_mapping_confidence(
+    source_slide: dict,
+    chosen_layout: dict,
+    layouts_by_type: Dict[str, List[dict]],
+) -> Dict[str, any]:
+    """Calculate confidence score for a slide-to-layout mapping.
+
+    Returns dict with:
+    - score: 0-100 confidence score
+    - reason: string explaining the score
+    - risk_level: 'low' | 'medium' | 'high'
+    """
+    hint = source_slide.get("layout_hint", "content_slide")
+    source_type = source_slide.get("type", "content")
+    layout_type = chosen_layout.get("detected_type", "unknown")
+    layout_name = chosen_layout.get("layout_name", "").lower()
+
+    score = 100
+    reasons = []
+    risk_factors = []
+
+    # Exact match bonus
+    if hint in layouts_by_type and hint == layout_type:
+        score += 10
+        reasons.append("Exact layout hint match")
+
+    # Source type match bonus
+    elif source_type == layout_type:
+        score += 5
+        reasons.append("Source type match")
+
+    # Penalize mismatches
+    if hint and hint != layout_type:
+        score -= 20
+        risk_factors.append(f"Layout hint mismatch: {hint} != {layout_type}")
+
+    # Check for high-risk mappings
+    # Section mapped to content slide (loss of visual hierarchy)
+    if source_type == "section" and layout_type == "content_slide":
+        score -= 30
+        risk_factors.append("Section slide mapped to content layout (visual hierarchy loss)")
+
+    # Content mapped to section header (content overflow risk)
+    if source_type in ("content", "title") and layout_type == "section_header":
+        score -= 25
+        risk_factors.append("Content slide mapped to section layout (overflow risk)")
+
+    # Content mapped to title slide (unlikely)
+    if source_type == "content" and layout_type == "title_slide":
+        score -= 40
+        risk_factors.append("Content slide mapped to title layout (severe mismatch)")
+
+    # Check content complexity vs layout capacity
+    body_length = len(" ".join(source_slide.get("body", [])))
+    has_images = source_slide.get("has_images", False)
+    has_tables = source_slide.get("has_tables", False)
+
+    # Too much content for simple layouts
+    if body_length > 500 and layout_type in ("section_header", "title_slide"):
+        score -= 20
+        risk_factors.append("Excessive content for simple layout")
+
+    # Images mapped to text-only layout
+    if has_images and layout_type == "section_header":
+        score -= 15
+        risk_factors.append("Images in section layout (may not display)")
+
+    # Determine risk level
+    risk_level = "low"
+    if score < 50:
+        risk_level = "high"
+    elif score < 75:
+        risk_level = "medium"
+
+    # Clamp score
+    score = max(0, min(100, score))
+
+    return {
+        "score": score,
+        "reason": "; ".join(reasons) if reasons else "Default matching",
+        "risk_factors": risk_factors,
+        "risk_level": risk_level,
+    }
+
+
 def _auto_map_slides(source_slides: List[dict], template_layouts: List[dict],
-                    verbose: bool) -> List[dict]:
+                    verbose: bool, interactive: bool = False) -> List[dict]:
     """Automatically map source slides to template layouts with intelligent cycling.
     
     When source has more slides than template layouts, this function intelligently
@@ -722,20 +816,104 @@ def _auto_map_slides(source_slides: List[dict], template_layouts: List[dict],
             layout_file = chosen_layout["layout_file"]
             layout_usage_count[layout_file] = layout_usage_count.get(layout_file, 0) + 1
             last_used_layout[hint or source_type] = layout_file
-            
-            mapping.append({
+
+            # Calculate mapping confidence
+            confidence = _calculate_mapping_confidence(
+                slide, chosen_layout, layouts_by_type
+            )
+
+            mapping_entry = {
                 "source_index": slide["index"],
                 "source_type": source_type,
                 "template_layout": layout_file,
                 "template_type": chosen_layout["detected_type"],
                 "layout_name": chosen_layout["layout_name"],
-            })
+                "confidence_score": confidence["score"],
+                "confidence_reason": confidence["reason"],
+                "risk_level": confidence["risk_level"],
+            }
+
+            if confidence["risk_factors"]:
+                mapping_entry["risk_factors"] = confidence["risk_factors"]
+
+            mapping.append(mapping_entry)
+
+            if verbose:
+                risk_indicator = {
+                    "low": "✓",
+                    "medium": "⚠️",
+                    "high": "❌",
+                }.get(confidence["risk_level"], "")
+
+                print(f"  Slide {slide['index']}: {risk_indicator} mapped to {layout_file} "
+                      f"(confidence: {confidence['score']}%, {confidence['risk_level']})")
+                if confidence["risk_factors"]:
+                    for factor in confidence["risk_factors"]:
+                        print(f"    - {factor}")
             
             if verbose and len(source_slides) > len(template_layouts):
                 print(f"  Slide {slide['index']}: mapped to {layout_file} "
                       f"(usage: {layout_usage_count[layout_file]})")
         else:
             print(f"Warning: No layout found for slide {slide['index']}", file=sys.stderr)
+
+    # Print mapping summary and warnings
+    if verbose:
+        print("\n" + "=" * 60)
+        print("MAPPING SUMMARY")
+        print("=" * 60)
+
+        high_risk = [m for m in mapping if m.get("risk_level") == "high"]
+        medium_risk = [m for m in mapping if m.get("risk_level") == "medium"]
+
+        if high_risk:
+            print(f"\n❌ HIGH RISK MAPPINGS ({len(high_risk)}):")
+            for m in high_risk:
+                print(f"  Slide {m['source_index']}: {m['source_type']} → {m['layout_name']}")
+                for factor in m.get("risk_factors", []):
+                    print(f"    - {factor}")
+            print("\n⚠️  These mappings may result in visual issues.")
+            print("    Consider using --save-mapping to manually adjust.")
+
+        if medium_risk:
+            print(f"\n⚠️  MEDIUM RISK MAPPINGS ({len(medium_risk)}):")
+            for m in medium_risk[:5]:  # Show first 5
+                print(f"  Slide {m['source_index']}: {m['source_type']} → {m['layout_name']}")
+                for factor in m.get("risk_factors", []):
+                    print(f"    - {factor}")
+            if len(medium_risk) > 5:
+                print(f"  ... and {len(medium_risk) - 5} more")
+
+        if not high_risk and not medium_risk:
+            print("\n✓ All mappings are low risk.")
+
+        print("=" * 60)
+
+    # Interactive confirmation for high-risk mappings
+    if interactive and high_risk:
+        print(f"\n⚠️  {len(high_risk)} high-risk mapping(s) detected!")
+        print("\nOptions:")
+        print("  1. Continue anyway (auto-fix high-risk)")
+        print("  2. Save mapping and exit (manual edit)")
+        print("  3. Cancel operation")
+
+        try:
+            choice = input("\nYour choice [1-3]: ").strip()
+            if choice == "2":
+                # Save mapping for manual editing
+                mapping_file = "mapping_review.json"
+                with open(mapping_file, "w", encoding="utf-8") as f:
+                    json.dump(mapping, f, indent=2, ensure_ascii=False)
+                print(f"\n✓ Mapping saved to: {mapping_file}")
+                print("  Edit the file and re-run with: --mapping mapping_review.json")
+                sys.exit(0)
+            elif choice == "3":
+                print("\n✗ Operation cancelled.")
+                sys.exit(0)
+            # choice == "1" or any other input: continue
+        except (KeyboardInterrupt, EOFError):
+            print("\n✗ Operation cancelled.")
+            sys.exit(0)
 
     return mapping
 
@@ -813,6 +991,104 @@ def _get_layout_rids(unpacked_dir: Path) -> Dict[str, str]:
     for m in re.finditer(r'<Relationship[^>]+Id="([^"]+)"[^>]+Target="slideLayouts/([^"]+)"', pres_rels):
         result[m.group(2)] = m.group(1)
     return result
+
+
+def _ensure_slide_masters_preserved(unpacked_dir: Path, verbose: bool = False) -> None:
+    """Ensure slideMasters and their relationships are preserved from template.
+    
+    In PowerPoint's OOXML structure:
+    - slide -> references slideLayout
+    - slideLayout -> references slideMaster
+    - slideMaster -> contains theme (colors, fonts, effects)
+    
+    This function ensures all slideMasters referenced by slideLayouts are
+    preserved in the output, along with their themes and relationships.
+    """
+    import shutil
+    
+    layouts_dir = unpacked_dir / "ppt" / "slideLayouts"
+    masters_dir = unpacked_dir / "ppt" / "slideMasters"
+    masters_rels_dir = masters_dir / "_rels"
+    themes_dir = unpacked_dir / "ppt" / "theme"
+    
+    # Collect all slideMasters referenced by layouts
+    referenced_masters = set()
+    layout_master_map = {}  # layout_file -> master_file
+    
+    if layouts_dir.exists():
+        for rels_file in layouts_dir.glob("_rels/*.xml.rels"):
+            rels_content = rels_file.read_text(encoding="utf-8")
+            # Find slideMaster reference
+            master_m = re.search(r'Target="(?:\.\/)?slideMasters/([^"]+)"', rels_content)
+            if master_m:
+                master_file = master_m.group(1)
+                layout_file = rels_file.name.replace(".xml.rels", "")
+                referenced_masters.add(master_file)
+                layout_master_map[layout_file] = master_file
+    
+    if not referenced_masters:
+        if verbose:
+            print("  No slideMasters referenced by layouts")
+        return
+    
+    if verbose:
+        print(f"  Found {len(referenced_masters)} slideMasters referenced by layouts")
+    
+    # Ensure directories exist
+    masters_dir.mkdir(exist_ok=True)
+    masters_rels_dir.mkdir(exist_ok=True)
+    
+    # Check which masters are missing and copy them from template if needed
+    # (They should already be there from unpack, but verify)
+    for master_file in referenced_masters:
+        master_path = masters_dir / master_file
+        if not master_path.exists():
+            if verbose:
+                print(f"  Warning: slideMaster {master_file} not found in unpacked dir")
+            continue
+        
+        # Ensure master rels file exists
+        master_rels_path = masters_rels_dir / f"{master_file}.rels"
+        if not master_rels_path.exists():
+            if verbose:
+                print(f"  Warning: slideMaster rels for {master_file} not found")
+    
+    # Ensure all themes referenced by masters are preserved
+    if masters_dir.exists():
+        for master_file in masters_dir.glob("*.xml"):
+            master_rels_path = masters_rels_dir / f"{master_file.name}.rels"
+            if master_rels_path.exists():
+                rels_content = master_rels_path.read_text(encoding="utf-8")
+                # Find theme references
+                for theme_m in re.finditer(r'Target="(?:\.\/)?theme/([^"]+)"', rels_content):
+                    theme_file = theme_m.group(1)
+                    theme_path = themes_dir / theme_file
+                    if not theme_path.exists() and verbose:
+                        print(f"  Warning: theme {theme_file} referenced by {master_file.name} not found")
+    
+    # Ensure [Content_Types].xml includes slideMasters and themes
+    ct_path = unpacked_dir / "[Content_Types].xml"
+    if ct_path.exists():
+        ct_content = ct_path.read_text(encoding="utf-8")
+        modified = False
+        
+        # Add slideMaster content type if missing
+        master_ct = '<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>'
+        if "slideMasters/slideMaster" not in ct_content:
+            # Add generic slideMaster content type
+            ct_content = ct_content.replace(
+                "</Types>",
+                '  <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>\n</Types>"
+            )
+            modified = True
+        
+        if modified:
+            ct_path.write_text(ct_content, encoding="utf-8")
+            if verbose:
+                print("  Updated [Content_Types].xml with slideMaster entries")
+    
+    if verbose:
+        print(f"  Preserved {len(referenced_masters)} slideMasters with themes")
 
 
 def _extract_layout_placeholders(layout_xml: str) -> List[dict]:
@@ -1718,6 +1994,7 @@ def _build_new_slides(
     source_unpacked_dir: Path,
     source_slide_file_map: Dict[int, str],
     verbose: bool,
+    skip_animations: bool = False,
 ) -> List[Tuple[str, str]]:
     """Create all new slides by duplicating template slides and injecting content."""
     # Build lookup including auto-generated TOC slides (source_index=0)
@@ -1796,14 +2073,17 @@ def _build_new_slides(
             verbose,
         )
 
-        # Migrate animations from source slide
+        # Migrate animations from source slide (with enhanced ID mapping)
         src_file = source_slide_file_map.get(idx)
-        if src_file:
-            _migrate_animations(
+        if src_file and not skip_animations:
+            migration_result = migrate_animations_with_id_mapping(
                 source_unpacked_dir, src_file,
                 unpacked_dir, new_slide_file,
-                verbose,
+                id_mapping=None,  # Auto-detect ID mapping
+                verbose=verbose,
             )
+            if verbose and migration_result["animations_migrated"]:
+                print(f"    ✓ {migration_result['updated_targets']} animation target(s) updated")
             # Migrate speaker notes if requested
             if keep_notes:
                 _migrate_notes(
@@ -1869,6 +2149,16 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--no-notes", dest="keep_notes", action="store_false",
                        help="Don't preserve speaker notes")
+    parser.add_argument(
+        "--skip-animations",
+        action="store_true",
+        help="Skip animation migration (useful when animations are incompatible with new layout)",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Interactive mode: confirm when high-risk mappings are detected",
+    )
     args = parser.parse_args()
 
     apply_template(
@@ -1880,4 +2170,6 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         verbose=args.verbose,
         keep_notes=args.keep_notes,
+        skip_animations=args.skip_animations,
+        interactive=args.interactive,
     )

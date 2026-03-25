@@ -229,11 +229,25 @@ Examples:
         """
     )
     parser.add_argument("input", help="Input .pptx file")
-    parser.add_argument("--find",    "-f", help="Text to search for")
+    parser.add_argument("--find",    "-f", help="Text to search for (supports regex with --regex)")
     parser.add_argument("--replace", "-r", help="Replacement text")
     parser.add_argument(
         "--slides",
         help="Comma-separated slide numbers to target (default: all slides)",
+    )
+    parser.add_argument(
+        "--slide-types",
+        help="Slide types to target (comma-separated: title,section,content,end)",
+    )
+    parser.add_argument(
+        "--regex",
+        action="store_true",
+        help="Treat --find as regular expression (Python re syntax)",
+    )
+    parser.add_argument(
+        "--batch-replace",
+        metavar="FILE",
+        help="JSON file with batch find/replace pairs (enhanced over --patch-file)",
     )
     parser.add_argument(
         "--patch-file",

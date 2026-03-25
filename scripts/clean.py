@@ -168,9 +168,57 @@ def get_referenced_files(unpacked_dir: Path) -> set:
     return referenced
 
 
+def get_essential_template_files(unpacked_dir: Path) -> set:
+    """Get essential template files that should never be removed.
+    
+    These include slideMasters, slideLayouts, and themes that are part of
+    the template's visual identity and should be preserved even if not
+    directly referenced by slides in sldIdLst.
+    """
+    essential = set()
+    
+    # Always preserve all slideMasters
+    masters_dir = unpacked_dir / "ppt" / "slideMasters"
+    if masters_dir.exists():
+        for f in masters_dir.glob("*.xml"):
+            essential.add(f.relative_to(unpacked_dir))
+        # Also preserve master rels files
+        masters_rels_dir = masters_dir / "_rels"
+        if masters_rels_dir.exists():
+            for f in masters_rels_dir.glob("*.rels"):
+                essential.add(f.relative_to(unpacked_dir))
+    
+    # Always preserve all slideLayouts
+    layouts_dir = unpacked_dir / "ppt" / "slideLayouts"
+    if layouts_dir.exists():
+        for f in layouts_dir.glob("*.xml"):
+            essential.add(f.relative_to(unpacked_dir))
+        # Also preserve layout rels files
+        layouts_rels_dir = layouts_dir / "_rels"
+        if layouts_rels_dir.exists():
+            for f in layouts_rels_dir.glob("*.rels"):
+                essential.add(f.relative_to(unpacked_dir))
+    
+    # Always preserve all themes (they're referenced by masters)
+    themes_dir = unpacked_dir / "ppt" / "theme"
+    if themes_dir.exists():
+        for f in themes_dir.glob("*.xml"):
+            essential.add(f.relative_to(unpacked_dir))
+        # Also preserve theme rels files
+        themes_rels_dir = themes_dir / "_rels"
+        if themes_rels_dir.exists():
+            for f in themes_rels_dir.glob("*.rels"):
+                essential.add(f.relative_to(unpacked_dir))
+    
+    return essential
+
+
 def remove_orphaned_files(unpacked_dir: Path, referenced: set) -> list[str]:
     resource_dirs = ["media", "embeddings", "charts", "diagrams", "tags", "drawings", "ink"]
     removed = []
+    
+    # Get essential template files that should never be removed
+    essential_files = get_essential_template_files(unpacked_dir)
 
     for dir_name in resource_dirs:
         dir_path = unpacked_dir / "ppt" / dir_name
@@ -185,10 +233,15 @@ def remove_orphaned_files(unpacked_dir: Path, referenced: set) -> list[str]:
                 file_path.unlink()
                 removed.append(str(rel_path))
 
+    # Note: theme files are now protected by get_essential_template_files
+    # We still check for truly orphaned theme files (not referenced and not essential)
     theme_dir = unpacked_dir / "ppt" / "theme"
     if theme_dir.exists():
         for file_path in theme_dir.glob("theme*.xml"):
             rel_path = file_path.relative_to(unpacked_dir)
+            # Skip if it's an essential file
+            if rel_path in essential_files:
+                continue
             if rel_path not in referenced:
                 file_path.unlink()
                 removed.append(str(rel_path))

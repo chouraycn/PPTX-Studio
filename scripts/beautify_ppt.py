@@ -325,8 +325,19 @@ def beautify_ppt(
     enhance_images: bool = True,
     use_gradient: bool = False,
     smart_icons: bool = False,
+    ai_ladder: bool = False,
+    ladder_depth: int = 5,
+    ladder_strategy: str = "lightness",
+    brand_color: Optional[str] = None,
 ) -> None:
-    """Redesign a PPT's visual style while preserving content."""
+    """Redesign a PPT's visual style while preserving content.
+    
+    Args:
+        ai_ladder: Enable AI color ladder (overrides theme colors with gradients)
+        ladder_depth: Number of ladder levels (3-10)
+        ladder_strategy: Gradient strategy ("lightness"/"saturation"/"complementary")
+        brand_color: Custom brand color for ladder generation (overrides theme primary)
+    """
 
     source_path = Path(source_pptx)
     output_path = Path(output_pptx)
@@ -355,6 +366,46 @@ def beautify_ppt(
 
     theme = THEMES[theme_name]
 
+    # AI Ladder Integration
+    ladder_enabled = False
+    if ai_ladder:
+        print("\n🎨 AI Color Ladder Enabled")
+        ladder_enabled = True
+        
+        # Import color_ladder module
+        try:
+            from color_ladder import get_theme_ladder, apply_brand_ladder
+            
+            if brand_color:
+                print(f"  Using brand color: #{brand_color}")
+                ladder_dict = apply_brand_ladder(
+                    str(source_path),
+                    brand_color,
+                    str(tmp_path / "temp_ladder.pptx"),
+                    depth=ladder_depth,
+                    strategy=ladder_strategy,
+                    preview=False,
+                    verbose=verbose
+                )
+                # Extract ladder colors from generated file
+                ladder = get_theme_ladder(theme_name, ladder_depth, ladder_strategy)
+            else:
+                print(f"  Generating ladder for theme: {theme_name}")
+                ladder = get_theme_ladder(theme_name, ladder_depth, ladder_strategy)
+            
+            # Update theme with ladder colors
+            theme["ladder"] = ladder
+            theme["ladder_enabled"] = True
+            print(f"  Ladder depth: {ladder_depth} levels")
+            print(f"  Ladder strategy: {ladder_strategy}")
+            print(f"  Level 0 (darkest): #{ladder['level_0']}")
+            print(f"  Level 2 (middle): #{ladder['level_2']}")
+            print(f"  Level 4 (lightest): #{ladder['level_4']}")
+        except ImportError as e:
+            print(f"Warning: Could not import color_ladder module: {e}")
+            print("Falling back to standard theme colors")
+            ladder_enabled = False
+
     # Override font pair if specified
     if font_pair:
         parts = font_pair.split("-")
@@ -364,7 +415,10 @@ def beautify_ppt(
             theme["body_font"] = parts[1].replace("_", " ").title()
 
     print(f"Theme: {theme['name']}")
-    print(f"Colors: Primary #{theme['primary']}, Accent #{theme['accent']}")
+    if ladder_enabled:
+        print(f"Colors: AI Ladder (Level 0-4)")
+    else:
+        print(f"Colors: Primary #{theme['primary']}, Accent #{theme['accent']}")
     print(f"Fonts: {theme['header_font']} / {theme['body_font']}")
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1058,17 +1112,20 @@ def _beautify_slide(
     """Apply theme to a single slide XML file."""
     xml = slide_path.read_text(encoding="utf-8")
 
+    # Check if AI ladder is enabled
+    ladder_enabled = theme.get("ladder_enabled", False)
+
     # 1. Set background (with optional gradient)
     if use_gradient and slide_type in ("title", "section", "conclusion"):
-        xml = _set_gradient_background(xml, theme, use_dark)
+        xml = _set_gradient_background(xml, theme, use_dark, ladder_enabled)
     else:
-        xml = _set_background(xml, theme, use_dark)
+        xml = _set_background(xml, theme, use_dark, ladder_enabled)
 
     # 2. Update text colors for contrast
-    xml = _update_text_colors(xml, theme, use_dark)
+    xml = _update_text_colors(xml, theme, use_dark, ladder_enabled)
 
     # 3. Update shape fill colors
-    xml = _update_shape_colors(xml, theme, use_dark)
+    xml = _update_shape_colors(xml, theme, use_dark, ladder_enabled)
 
     # 4. Update font faces
     xml = _update_fonts(xml, theme)
@@ -1732,6 +1789,30 @@ if __name__ == "__main__":
         action="store_true",
         help="Auto-insert icons based on content keywords",
     )
+    parser.add_argument(
+        "--ai-ladder",
+        action="store_true",
+        help="Enable AI color ladder (overrides theme colors with multi-level gradients)",
+    )
+    parser.add_argument(
+        "--ladder-depth",
+        type=int,
+        default=5,
+        choices=range(3, 11),
+        metavar="N",
+        help="Number of ladder levels (3-10, default: 5)",
+    )
+    parser.add_argument(
+        "--ladder-strategy",
+        choices=["lightness", "saturation", "complementary"],
+        default="lightness",
+        help="Gradient strategy: lightness (dark→light), saturation (dull→vivid), complementary (color→opposite)",
+    )
+    parser.add_argument(
+        "--brand-color",
+        metavar="HEX",
+        help="Custom brand color for ladder generation (e.g., '0066CC')",
+    )
     args = parser.parse_args()
 
     if args.list_themes:
@@ -1757,4 +1838,8 @@ if __name__ == "__main__":
         enhance_images=not args.no_image_enhance,
         use_gradient=args.gradient_bg,
         smart_icons=args.smart_icons,
+        ai_ladder=args.ai_ladder,
+        ladder_depth=args.ladder_depth,
+        ladder_strategy=args.ladder_strategy,
+        brand_color=args.brand_color,
     )

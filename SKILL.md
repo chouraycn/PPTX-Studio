@@ -32,6 +32,9 @@ User provides ONE .pptx file + says "read / extract / summarize / what's in this
 User provides ONE .pptx file + says "add speaker notes / generate notes / write notes for me / 加备注 / 生成演讲者备注 / 写备注"?
   → Speaker Notes Workflow
 
+User provides ONE .pptx file + says "change color / 换颜色 / 改颜色 / 橙色换蓝色 / 整体换色"?
+  → Global Color Replacement (color_replacement.py)
+
 User provides TWO OR MORE .pptx files + says "merge / combine / join / concatenate / 合并 / 拼接 / 合在一起"?
   → Mode 6: Merge PPT
 
@@ -48,6 +51,12 @@ Still unclear?
 |--------------|------|
 | 给两个pptx，套/换/应用模板 | Mode 1: Template Apply |
 | 美化、优化、让它更好看 | Mode 2: Style Beautify |
+| 编辑、更新、修改内容 | Mode 3: Editing Workflow |
+| 读取、提取、总结内容 | Mode 4: Reading Content (markitdown) |
+| 加备注、生成演讲者备注、写备注 | Mode 5: Speaker Notes Workflow |
+| 换颜色、改颜色、整体换色、橙色换蓝色 | **Global Color Replacement** ⭐ |
+| 合并、拼接、合在一起 | Mode 6: Merge PPT |
+| 从零创建、新建PPT | Mode 7: Creating from Scratch (pptxgenjs) |
 | 更换模板、切换模板、换个风格 | Mode 1（有模板文件）或 Mode 2（无模板文件） |
 | 修改内容、调整文字、增减页 | patch_slide（单点文字）或 Editing Workflow（结构性修改） |
 | 读取、提取、总结内容 | Reading Content |
@@ -796,6 +805,172 @@ Accent: #D8F3DC (pale mint)
 Background: #F1F8E9 / #081C15
 Font: Cambria + Calibri
 ```
+
+### color_replacement.py ⭐
+
+**整体换色 + AI 色彩阶梯** — 全局替换 PPT 中的所有颜色（文字、形状、背景、渐变、填充），支持 AI 智能生成多级色彩阶梯。
+
+#### 核心能力
+
+1. **整体换色** — 将整个 PPT 的配色方案从一种颜色换成另一种（如橙色→蓝色）
+2. **AI 色彩阶梯** — 基于品牌色自动生成 3-10 级渐变色，智能应用到所有元素
+3. **主题间换色** — 在 12 个预设主题之间快速切换配色
+4. **预览模式** — 先预览再应用，避免误操作
+
+#### 使用场景
+
+| 场景 | 命令 |
+|------|------|
+| 橙色换蓝色（整体换色） | `python scripts/color_replacement.py input.pptx output.pptx --replace-primary F96167 0284C7` |
+| AI 生成蓝色阶梯（深度5级） | `python scripts/color_replacement.py input.pptx output.pptx --ai-ladder 0284C7 --depth 5` |
+| 主题切换（暖色→科技） | `python scripts/color_replacement.py input.pptx output.pptx --theme-from warm --theme-to tech` |
+| 预览换色效果 | `python scripts/color_replacement.py input.pptx output.pptx --replace-primary F96167 0284C7 --preview` |
+
+#### 命令参数
+
+**单色替换**：
+- `--replace-primary OLD NEW` — 替换主色（如 `F96167 0284C7`）
+- `--replace-secondary OLD NEW` — 替换次要色
+- `--replace-accent OLD NEW` — 替换强调色
+
+**AI 色彩阶梯**：
+- `--ai-ladder BASE_COLOR` — 基于基准色生成色彩阶梯
+- `--ladder-depth N` — 阶梯级数（默认 5，范围 3-10）
+- `--ladder-strategy STRATEGY` — 策略：`lightness`（明度渐变）、`saturation`（饱和度渐变）、`complementary`（互补色渐变）
+
+**主题换色**：
+- `--theme-from THEME` — 源主题（12 种主题名）
+- `--theme-to THEME` — 目标主题
+
+**其他选项**：
+- `--color-map-file FILE` — 使用自定义 JSON 颜色映射文件
+- `--preview` — 预览模式（不实际修改）
+- `--verbose, -v` — 显示详细信息
+
+#### 色彩阶梯策略说明
+
+**Lightness（明度渐变，默认）** — 从暗到亮的 5 级渐变：
+```
+Level 0: 最深色 - 浅背景上的文字、深色元素
+Level 1: 较深色 - 次要元素、强调边框
+Level 2: 中等色 - 主要内容区域
+Level 3: 较浅色 - 第三级元素、浅色背景
+Level 4: 最浅色 - 深背景上的文字、高亮元素
+```
+
+**Saturation（饱和度渐变）** — 从灰暗到鲜艳的 5 级渐变：
+```
+Level 0: 灰暗（10% 饱和度）
+Level 1: 柔和（32% 饱和度）
+Level 2: 平衡（55% 饱和度）
+Level 3: 鲜艳（77% 饱和度）
+Level 4: 浓烈（100% 饱和度）
+```
+
+**Complementary（互补色渐变）** — 从基色跨越到互补色的 5 级渐变：
+```
+Level 0: 基色（如橙色）
+Level 1: 过渡色 1（橙红→红橙）
+Level 2: 中性过渡
+Level 3: 过渡色 2（蓝绿→青蓝）
+Level 4: 互补色（如蓝色）
+```
+
+#### 可用主题
+
+| 主题 | 主色 | 次色 | 强调色 | 适用场景 |
+|------|------|------|--------|----------|
+| executive | 深蓝 | 冰蓝 | 金色 | 商务汇报、投资路演 |
+| tech | 青绿 | 深海军蓝 | 薄荷绿 | 技术分享、产品发布 |
+| creative | 珊瑚色 | 海军蓝 | 金色 | 创意提案、设计展示 |
+| warm | 陶土色 | 鼠尾草绿 | 沙色 | 教育、非营利组织 |
+| minimal | 炭灰 | 薰荷色 | 白色 | 学术报告、简洁风格 |
+| bold | 樱桃红 | 深蓝 | 金色 | 冲击力强的演讲 |
+| nature | 森林绿 | 琥珀色 | 天空蓝 | 环保、健康、农业 |
+| ocean | 深海蓝 | 青色 | 浅蓝 | 旅游、海洋、科技 |
+| elegant | 深灰蓝 | 橄榄色 | 珊瑚红 | 高端商务、奢侈品 |
+| modern | 紫罗兰 | 粉红 | 洋红 | 互联网、时尚、创新 |
+| sunset | 暖橙 | 金黄 | 浅黄 | 能源、餐饮、温暖主题 |
+| forest | 深林绿 | 翡翠绿 | 薄荷绿 | 可持续发展、有机产品 |
+
+#### 实战示例
+
+**示例 1：品牌色集成**
+你的品牌色是 `#0066CC`（蓝色），应用到现有 PPT：
+
+```bash
+# 生成 5 级蓝色阶梯并替换所有颜色
+python scripts/color_replacement.py presentation.pptx output.pptx \
+    --ai-ladder 0066CC \
+    --depth 5 \
+    --ladder-strategy lightness \
+    --verbose
+```
+
+**示例 2：主题快速切换**
+从暖色主题切换到科技主题：
+
+```bash
+# 预览效果
+python scripts/color_replacement.py presentation.pptx output.pptx \
+    --theme-from warm \
+    --theme-to tech \
+    --preview
+
+# 应用切换
+python scripts/color_replacement.py presentation.pptx output.pptx \
+    --theme-from warm \
+    --theme-to tech
+```
+
+**示例 3：季节性换色**
+将秋季（橙色）更新为冬季（蓝色）：
+
+```bash
+python scripts/color_replacement.py presentation.pptx output.pptx \
+    --replace-primary F96167 0077B6 \
+    --replace-secondary F97316 00B4D8 \
+    --replace-accent FBBF24 0284C7
+```
+
+**示例 4：多品牌 PPT 统一**
+将不同品牌的 PPT 统一为科技主题：
+
+```bash
+# 品牌 A 的演示文稿
+python scripts/color_replacement.py brand_a.pptx unified_a.pptx \
+    --theme-from creative \
+    --theme-to tech
+
+# 品牌 B 的演示文稿
+python scripts/color_replacement.py brand_b.pptx unified_b.pptx \
+    --theme-from warm \
+    --theme-to tech
+```
+
+#### 高级用法
+
+**自定义颜色映射文件**：
+创建 JSON 文件（如 `my_colors.json`）：
+```json
+{
+  "F96167": "0284C7",
+  "F97316": "0077B6",
+  "FBBF24": "00A8E8",
+  "B85042": "003366",
+  "84B59F": "00D9FF"
+}
+```
+
+应用：
+```bash
+python scripts/color_replacement.py input.pptx output.pptx \
+    --color-map-file my_colors.json
+```
+
+**查看更多示例**：参见 `examples/README.md` 和 `examples/color_maps/` 目录。
+
+> 💡 **Tip**: 始终先用 `--preview` 预览效果，确认后再应用。`--verbose` 会显示详细的颜色统计信息。
 
 ---
 
