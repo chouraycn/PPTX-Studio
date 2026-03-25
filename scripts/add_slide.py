@@ -164,7 +164,7 @@ def _get_next_slide_id(unpacked_dir: Path) -> int:
     return max(slide_ids) + 1 if slide_ids else 256
 
 
-def parse_source(source: str) -> tuple[str, str | None]:
+def parse_source(source: str) -> Tuple[str, Optional[str]]:
     if source.startswith("slideLayout") and source.endswith(".xml"):
         return ("layout", source)
 

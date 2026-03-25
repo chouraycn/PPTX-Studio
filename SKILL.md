@@ -15,10 +15,9 @@ Handle all .pptx tasks — create from scratch, edit existing files, apply templ
 
 ```
 User provides TWO .pptx files?
-  → Mode 1: Template Apply (三阶段：AI审校内容 → 套入模板 → AI逐页美化)
-  ℹ️  Animation note: apply_template 会自动迁移源 PPT 的动画时间轴结构，
-      但因形状 ID 重新分配，目标形状可能需在 PowerPoint 中手动重新绑定。
-      备注（Speaker Notes）完整保留。
+  → Mode 1: AI 驱动的模板套用
+    五阶段流程：① AI深度理解内容 → ② AI优化纠错 → ③ AI智能布局设计 → ④ 脚本执行 → ⑤ AI生成备注
+    ℹ️  动画时间轴结构自动迁移（形状ID重新分配后需在PPT中手动重绑），备注完整保留。
 
 User provides ONE .pptx file + says "beautify / redesign / make it look better"?
   → Mode 2: Style Beautify
@@ -34,7 +33,7 @@ User provides ONE .pptx file + says "add speaker notes / generate notes / write 
   → Speaker Notes Workflow
 
 User provides ONE .pptx file + says "change color / 换颜色 / 改颜色 / 橙色换蓝色 / 整体换色"?
-  → Global Color Replacement (color_replacement.py)
+  → Global Color Replacement (color_ppt.py / color_replacement.py)
 
 User provides TWO OR MORE .pptx files + says "merge / combine / join / concatenate / 合并 / 拼接 / 合在一起"?
   → Mode 6: Merge PPT
@@ -50,20 +49,15 @@ Still unclear?
 
 | User says... | Mode |
 |--------------|------|
-| 给两个pptx，套/换/应用模板 | Mode 1: Template Apply |
+| 给两个pptx，套/换/应用模板 | Mode 1: AI 驱动的模板套用（AI理解→AI优化→AI设计→脚本执行→AI备注） |
 | 美化、优化、让它更好看 | Mode 2: Style Beautify |
-| 编辑、更新、修改内容 | Mode 3: Editing Workflow |
-| 读取、提取、总结内容 | Mode 4: Reading Content (markitdown) |
-| 加备注、生成演讲者备注、写备注 | Mode 5: Speaker Notes Workflow |
-| 换颜色、改颜色、整体换色、橙色换蓝色 | **Global Color Replacement** ⭐ |
+| 编辑、更新、修改内容（单点修改） | patch_slide.py（快速路径） |
+| 编辑、更新、修改内容（结构修改） | Editing Workflow（解包→编辑XML→打包） |
+| 读取、提取、总结内容 | Reading Content（markitdown） |
+| 加备注、生成演讲者备注、写备注 | Speaker Notes Workflow |
+| 换颜色、改颜色、整体换色、橙色换蓝色 | Global Color Replacement（color_ppt.py / color_replacement.py） |
 | 合并、拼接、合在一起 | Mode 6: Merge PPT |
-| 从零创建、新建PPT | Mode 7: Creating from Scratch (pptxgenjs) |
-| 更换模板、切换模板、换个风格 | Mode 1（有模板文件）或 Mode 2（无模板文件） |
-| 修改内容、调整文字、增减页 | patch_slide（单点文字）或 Editing Workflow（结构性修改） |
-| 读取、提取、总结内容 | Reading Content |
-| 加备注、写演讲提示、生成 Speaker Notes | Speaker Notes Workflow |
-| 合并多个PPT、拼接、合在一起 | Mode 6: Merge PPT |
-| 做一个新PPT | Creating from Scratch |
+| 从零创建、新建PPT | Creating from Scratch（pptxgenjs） |
 
 ---
 
@@ -74,9 +68,10 @@ Still unclear?
 | Read/analyze content | `python -m markitdown presentation.pptx` |
 | Edit existing PPT | Editing Workflow section below |
 | Create from scratch | Creating from Scratch section below |
-| Apply template (with AI review + beautify) | Mode 1 below — 三阶段完整流程 |
-| AI content review only | Mode 1 阶段 A |
-| AI per-slide beautify only | Mode 1 阶段 C |
+| Apply template (AI-driven 5-stage) | Mode 1 below — AI理解→AI优化→AI布局设计→脚本执行→AI备注 |
+| AI content analysis only | Mode 1 阶段 0 |
+| AI content optimization only | Mode 1 阶段 1 |
+| AI layout design only | Mode 1 阶段 2 |
 | Beautify PPT style | Mode 2 below |
 | Generate speaker notes | Speaker Notes Workflow below |
 | Merge multiple PPTXs | Mode 6: Merge PPT below |
@@ -203,7 +198,7 @@ Two powerful transformation modes — both now include **AI-powered stages** and
 
 | Mode | Description |
 |------|-------------|
-| **Template Apply** | 三阶段：① AI审校内容（纠错/精简/补全） → ② 脚本套入模板（配色/字体/布局） → ③ AI逐页美化（排版/字数控制/空行清理） |
+| **Mode 1: Template Apply** | 五阶段 AI 驱动：① AI深度理解 → ② AI优化纠错补充 → ③ AI智能布局设计 → ④ 脚本执行模板套用 → ⑤ AI生成备注 |
 | **Style Beautify** | Redesign visual style with **12 themes**, **10 layout variants**, **smart image enhancement**, and **auto icon insertion** |
 
 ### Enhanced Visual Features (New)
@@ -1128,6 +1123,20 @@ python scripts/apply_template.py source.pptx template.pptx out.pptx --mapping ma
 python scripts/apply_template.py source.pptx template.pptx out.pptx
 ```
 
+**What gets preserved automatically:**
+
+- ✅ **Speaker Notes**: Complete notes content migrated from source to target
+- ✅ **Animations**: Timing structure (`<p:timing>`) preserved (shape IDs remapped, may need re-binding in PowerPoint)
+- ✅ **Hyperlinks**: All text-based hyperlinks are migrated automatically using `hyperlink_migration.py`
+- ✅ **Images**: Extracted and re-injected into template layouts
+- ✅ **Tables**: Basic table structure preserved (use `beautify_ppt.py` for enhanced styling)
+
+**What requires manual handling:**
+
+- ❌ **Complex Charts**: Extracted as images, not live chart objects (re-create in PowerPoint)
+- ❌ **SmartArt**: Converted to basic shapes (re-design using template layout variants)
+- ❌ **Embedded Fonts**: Not transferred (install fonts locally or use theme fonts)
+
 ### patch_slide.py
 
 Lightweight text patcher — finds and replaces text without unpacking.
@@ -1641,13 +1650,14 @@ python -m markitdown output.pptx
 
 ## Known Limitations
 
-| Scenario | Issue | Workaround |
-|----------|-------|------------|
-| `apply_template.py` with complex charts | Charts are extracted as images, not live chart objects | Manually re-insert charts after applying template |
+| Scenario | Issue | Workaround / Solution |
+|----------|-------|----------------------|
+| `apply_template.py` with complex charts | Charts are extracted as images, not live chart objects | Manually re-insert charts after applying template (PowerPoint allows recreating from image) |
 | `apply_template.py` when slide counts differ greatly | Auto-mapping may repeat or skip template layouts | Use `--mapping` flag to provide a manual mapping JSON |
 | `apply_template.py` rich text with mixed bold/plain | bold/italic/size are preserved per run; font face is always the template font | Use XML editing to adjust individual runs after apply |
-| `apply_template.py` hyperlinks | Links are not migrated (text is extracted without URL) | Re-add hyperlinks manually in PowerPoint after apply |
+| `apply_template.py` hyperlinks | **RESOLVED**: Links are now migrated automatically using `hyperlink_migration.py` | No workaround needed; hyperlinks are preserved during template application |
 | `beautify_ppt.py` on slides with custom positioned elements | Script may reposition elements to fit the new theme grid | Run visual QA and manually adjust offending slides via XML |
 | Very long bullet text | May overflow text boxes after theme change | Shorten content or adjust font size in XML after beautify |
 | Embedded fonts in source PPT | Fonts may not transfer to output | Install the same fonts locally, or substitute with theme fonts |
 | LibreOffice not installed | `soffice` conversion for image QA will fail | Install via `brew install libreoffice` (macOS) |
+| Python 3.10+ compatibility | **RESOLVED**: All scripts now use Python 3.9.6 compatible syntax | No workaround needed; scripts work with system Python 3.9.6 |

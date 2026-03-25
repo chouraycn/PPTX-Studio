@@ -46,7 +46,7 @@ def get_slides_in_sldidlst(unpacked_dir: Path) -> set[str]:
     return {rid_to_slide[rid] for rid in referenced_rids if rid in rid_to_slide}
 
 
-def remove_orphaned_slides(unpacked_dir: Path) -> list[str]:
+def remove_orphaned_slides(unpacked_dir: Path) -> List[str]:
     slides_dir = unpacked_dir / "ppt" / "slides"
     slides_rels_dir = slides_dir / "_rels"
     pres_rels_path = unpacked_dir / "ppt" / "_rels" / "presentation.xml.rels"
@@ -88,7 +88,7 @@ def remove_orphaned_slides(unpacked_dir: Path) -> list[str]:
     return removed
 
 
-def remove_trash_directory(unpacked_dir: Path) -> list[str]:
+def remove_trash_directory(unpacked_dir: Path) -> List[str]:
     trash_dir = unpacked_dir / "[trash]"
     removed = []
 
@@ -125,7 +125,7 @@ def get_slide_referenced_files(unpacked_dir: Path) -> set:
     return referenced
 
 
-def remove_orphaned_rels_files(unpacked_dir: Path) -> list[str]:
+def remove_orphaned_rels_files(unpacked_dir: Path) -> List[str]:
     resource_dirs = ["charts", "diagrams", "drawings"]
     removed = []
     slide_referenced = get_slide_referenced_files(unpacked_dir)
@@ -213,7 +213,7 @@ def get_essential_template_files(unpacked_dir: Path) -> set:
     return essential
 
 
-def remove_orphaned_files(unpacked_dir: Path, referenced: set) -> list[str]:
+def remove_orphaned_files(unpacked_dir: Path, referenced: set) -> List[str]:
     resource_dirs = ["media", "embeddings", "charts", "diagrams", "tags", "drawings", "ink"]
     removed = []
     
@@ -271,7 +271,7 @@ def remove_orphaned_files(unpacked_dir: Path, referenced: set) -> list[str]:
     return removed
 
 
-def update_content_types(unpacked_dir: Path, removed_files: list[str]) -> None:
+def update_content_types(unpacked_dir: Path, removed_files: List[str]) -> None:
     ct_path = unpacked_dir / "[Content_Types].xml"
     if not ct_path.exists():
         return
@@ -291,7 +291,7 @@ def update_content_types(unpacked_dir: Path, removed_files: list[str]) -> None:
             f.write(dom.toxml(encoding="utf-8"))
 
 
-def clean_unused_files(unpacked_dir: Path) -> list[str]:
+def clean_unused_files(unpacked_dir: Path) -> List[str]:
     all_removed = []
 
     slides_removed = remove_orphaned_slides(unpacked_dir)

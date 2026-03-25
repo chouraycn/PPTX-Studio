@@ -19,7 +19,7 @@ import defusedxml.minidom
 WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
-def simplify_redlines(input_dir: str) -> tuple[int, str]:
+def simplify_redlines(input_dir: str) -> Tuple[int, str]:
     doc_xml = Path(input_dir) / "word" / "document.xml"
 
     if not doc_xml.exists():
@@ -123,7 +123,7 @@ def _find_elements(root, tag: str) -> list:
     return results
 
 
-def get_tracked_change_authors(doc_xml_path: Path) -> dict[str, int]:
+def get_tracked_change_authors(doc_xml_path: Path) -> Dict[str, int]:
     if not doc_xml_path.exists():
         return {}
 
@@ -136,7 +136,7 @@ def get_tracked_change_authors(doc_xml_path: Path) -> dict[str, int]:
     namespaces = {"w": WORD_NS}
     author_attr = f"{{{WORD_NS}}}author"
 
-    authors: dict[str, int] = {}
+    authors: Dict[str, int] = {}
     for tag in ["ins", "del"]:
         for elem in root.findall(f".//w:{tag}", namespaces):
             author = elem.get(author_attr)
@@ -146,7 +146,7 @@ def get_tracked_change_authors(doc_xml_path: Path) -> dict[str, int]:
     return authors
 
 
-def _get_authors_from_docx(docx_path: Path) -> dict[str, int]:
+def _get_authors_from_docx(docx_path: Path) -> Dict[str, int]:
     try:
         with zipfile.ZipFile(docx_path, "r") as zf:
             if "word/document.xml" not in zf.namelist():
@@ -158,7 +158,7 @@ def _get_authors_from_docx(docx_path: Path) -> dict[str, int]:
                 namespaces = {"w": WORD_NS}
                 author_attr = f"{{{WORD_NS}}}author"
 
-                authors: dict[str, int] = {}
+                authors: Dict[str, int] = {}
                 for tag in ["ins", "del"]:
                     for elem in root.findall(f".//w:{tag}", namespaces):
                         author = elem.get(author_attr)
@@ -178,7 +178,7 @@ def infer_author(modified_dir: Path, original_docx: Path, default: str = "Claude
 
     original_authors = _get_authors_from_docx(original_docx)
 
-    new_changes: dict[str, int] = {}
+    new_changes: Dict[str, int] = {}
     for author, count in modified_authors.items():
         original_count = original_authors.get(author, 0)
         diff = count - original_count

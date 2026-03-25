@@ -36,7 +36,7 @@ def unpack(
     output_directory: str,
     merge_runs: bool = True,
     simplify_redlines: bool = True,
-) -> tuple[None, str]:
+) -> Tuple[None, str]:
     input_path = Path(input_file)
     output_path = Path(output_directory)
     suffix = input_path.suffix.lower()

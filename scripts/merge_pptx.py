@@ -68,14 +68,14 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def parse_order_spec(
-    tokens: list[str], num_files: int, totals: list[int]
-) -> list[tuple[int, int]]:
+    tokens: List[str], num_files: int, totals: List[int]
+) -> List[Tuple[int, int]]:
     """Parse --order tokens into a list of (0-based file_index, 0-based slide_index).
 
     Each token is "<file_num>:<slide_num>" where both numbers are 1-based.
     Example: ["1:1", "2:1", "1:2"] → [(0,0), (1,0), (0,1)]
     """
-    result: list[tuple[int, int]] = []
+    result: List[Tuple[int, int]] = []
     for token in tokens:
         token = token.strip()
         m = re.fullmatch(r"(\d+):(\d+)", token)
@@ -102,12 +102,12 @@ def parse_order_spec(
     return result
 
 
-def parse_slide_range(spec: str, total: int) -> list[int]:
+def parse_slide_range(spec: str, total: int) -> List[int]:
     """Parse a slide range spec like "1-3" or "1,3,5" into 0-based indices.
 
     Slide numbers are 1-based in the spec, returned as 0-based indices.
     """
-    indices: list[int] = []
+    indices: List[int] = []
     for part in spec.split(","):
         part = part.strip()
         m = re.fullmatch(r"(\d+)\s*-\s*(\d+)", part)
@@ -130,7 +130,7 @@ def parse_slide_range(spec: str, total: int) -> list[int]:
 # Core merge logic
 # ---------------------------------------------------------------------------
 
-def _iter_slides(prs: Presentation, indices: list[int]) -> Generator:
+def _iter_slides(prs: Presentation, indices: List[int]) -> Generator:
     """Yield (slide_element, notes_element_or_None) for each requested slide."""
     slide_list = prs.slides
     for idx in indices:
@@ -164,10 +164,10 @@ def _append_slide(dest_prs: Presentation, slide_el: etree._Element,
 
 
 def merge(
-    input_files: list[str],
+    input_files: List[str],
     output_file: str,
-    slides_specs: list[str] | None = None,
-    order_specs: list[str] | None = None,
+    slides_specs: List[str] | None = None,
+    order_specs: List[str] | None = None,
     ignore_notes: bool = False,
     dry_run: bool = False,
     resize_strategy: str = "smart",
@@ -241,7 +241,7 @@ def merge(
     # -----------------------------------------------------------------------
     # Mode B: sequential merge (--slides optional range filter)
     # -----------------------------------------------------------------------
-    resolved: list[list[int]] = []
+    resolved: List[List[int]] = []
     for i, prs in enumerate(presentations):
         total = totals[i]
         if slides_specs and i < len(slides_specs):

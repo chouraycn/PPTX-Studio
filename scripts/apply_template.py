@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from extract_content import extract_content
 from animation_migration import migrate_animations_with_id_mapping
+from hyperlink_migration import extract_hyperlinks, inject_hyperlinks
 
 
 def _run_unpack(input_file: str, output_dir: str) -> None:
@@ -238,6 +239,22 @@ def apply_template(
 
         # Update presentation.xml with new slide order
         _update_presentation_order(unpacked_dir, new_slides)
+
+        # Extract and migrate hyperlinks from source to target
+        if verbose:
+            print("\nMigrating hyperlinks...")
+        source_hyperlinks = extract_hyperlinks(str(source_unpacked_dir))
+        # Build source index -> target slide file mapping
+        source_index_to_target = {}
+        for idx, target_slide in enumerate(new_slides, 1):
+            source_index_to_target[idx] = target_slide
+        hyperlinks_injected = inject_hyperlinks(
+            str(unpacked_dir),
+            source_hyperlinks,
+            source_index_to_target
+        )
+        if verbose and hyperlinks_injected > 0:
+            print(f"  + Migrated {hyperlinks_injected} hyperlinks")
 
         # Clean up unreferenced files
         print("\nCleaning up...")
@@ -2127,7 +2144,7 @@ def _slide_has_dark_bg(slide_xml: str, template_colors: Dict[str, str]) -> bool:
 
 def _replace_placeholder_text(
     slide_xml: str,
-    ph_types: list[str],
+    ph_types: List[str],
     new_text: str,
     color: Optional[str] = None,
     bold: bool = False,
@@ -2221,7 +2238,7 @@ def _replace_placeholder_text(
     return re.sub(r'<p:sp\b.*?</p:sp>', replace_sp, slide_xml, flags=re.DOTALL)
 
 
-def _replace_placeholder_content(slide_xml: str, ph_types: list[str], new_content_xml: str) -> str:
+def _replace_placeholder_content(slide_xml: str, ph_types: List[str], new_content_xml: str) -> str:
     """Replace entire text body of a placeholder with new XML content.
 
     Handles two cases:
@@ -2281,7 +2298,7 @@ def _replace_placeholder_content(slide_xml: str, ph_types: list[str], new_conten
 
 
 def _build_body_xml(
-    lines: list[str],
+    lines: List[str],
     color: Optional[str] = None,
     rich: Optional[List[dict]] = None,
     latin_font: str = "",
