@@ -1985,9 +1985,16 @@ def _inject_content_into_slide(
     modified = slide_xml
 
     # ── Title ─────────────────────────────────────────────────────────────────
-    if title:
+    # If title is empty but body has content, use body[0] as title
+    effective_title = title
+    body_index_offset = 0  # How many items to skip from body when injecting content
+    if not title and body:
+        effective_title = body[0]
+        body_index_offset = 1  # Skip body[0] since it's now the title
+
+    if effective_title:
         modified_after = _replace_placeholder_text(
-            modified, ["title", "ctrTitle"], title,
+            modified, ["title", "ctrTitle"], effective_title,
             color=title_color,
             latin_font=title_latin_font,
             ea_font=title_ea_font,
@@ -2002,14 +2009,6 @@ def _inject_content_into_slide(
             latin_font=body_latin_font,
             ea_font=body_ea_font,
         )
-    elif body and not subtitle:
-        if source_slide.get("type") == "title":
-            modified = _replace_placeholder_text(
-                modified, ["subTitle"], body[0] if body else "",
-                color=body_color,
-                latin_font=body_latin_font,
-                ea_font=body_ea_font,
-            )
 
     # ── Body / content placeholder ────────────────────────────────────────────
     if body:
@@ -2018,8 +2017,9 @@ def _inject_content_into_slide(
             # Trim rich list to match
             rich_to_use = body_rich[1:] if (subtitle and body_rich) else body_rich
         else:
-            body_to_use = body
-            rich_to_use = body_rich
+            # Apply offset when title was taken from body[0]
+            body_to_use = body[body_index_offset:]
+            rich_to_use = body_rich[body_index_offset:] if body_rich else []
 
         if body_to_use:
             body_xml = _build_body_xml(

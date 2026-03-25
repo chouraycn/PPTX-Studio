@@ -261,115 +261,216 @@ Transform scripts quick reference:
 
 ---
 
-## Mode 1: Template Apply
+## Mode 1: AI 驱动的模板套用
 
-Apply an existing template's visual identity to your content — with **two AI-powered stages** to ensure content accuracy and per-slide visual quality before and after the template is applied.
+**核心价值：不是复制粘贴，而是让 AI 理解内容后重新创作。**
+
+将源 PPT 内容智能迁移到目标模板，由 AI 驱动完成内容理解、排版设计、和备注生成。
 
 ### When to use
 
-- User provides a source PPT (their content) and a template PPT (the desired look)
-- User says: "apply this template", "make my PPT look like this", "use this style"
+- 用户提供了一个内容 PPT 和一个模板 PPT
+- 用户期望：AI 理解内容 → 智能排版 → 生成专业备注
+- 触发词：套模板、应用模板、换个风格、把内容放到模板里
 
-### Overview — 三阶段流程
+### 传统方式 vs AI 驱动方式
+
+| 传统方式（脚本复制） | AI 驱动方式（Mode 1） |
+|-------------------|---------------------|
+| 提取文字后直接复制到占位符 | AI 理解每页的语义和逻辑关系 |
+| 随机或固定分配布局 | AI 根据内容类型选择最佳布局 |
+| 只迁移现有文本 | AI 自动纠错、完善、补充内容 |
+| 无备注生成能力 | AI 生成洞察性演讲备注 |
+| 排版规则固定 | AI 根据内容密度动态调整排版 |
+
+### Overview — 五阶段 AI 流程
 
 ```
-阶段 A: 内容提取 + AI 审校纠错
-  ↓ AI 检查内容完整性、纠正错误、调整结构
-阶段 B: 套入模板（脚本自动执行）
-  ↓ apply_template.py 将审校后内容注入模板
-  ↓ 自动替换形状/表格颜色 + 自动化排版美化
-  ↓ [--beautify] AI 完整美化（布局/配色/字体/表格）← 新增
-阶段 C: AI 逐页美化调整 + 备注增强
-  ↓ AI 排版优化 + 保留原备注并追加 AI 摘要
-最终输出：内容准确 + 视觉精良 + 备注完善的 PPT
+阶段 0: AI 内容深度理解
+  ↓ AI 阅读源 PPT，理解每一页的语义和逻辑
+阶段 1: AI 内容优化
+  ↓ AI 纠错（错别字/语法）+ 完善（语句不通顺处）+ 补充（AI 认为缺失的内容）
+阶段 2: AI 智能布局设计
+  ↓ AI 判断每页类型，选择最佳模板布局，不是复制而是重新设计
+阶段 3: 执行模板套用
+  ↓ 脚本执行 AI 决策的映射方案
+阶段 4: AI 备注生成
+  ↓ AI 生成核心要点 + 演讲提示 + 过渡引导
+
+输出：一个经过 AI 深度加工的，专业级的 PPT
 ```
 
-> ℹ️ **动画保留说明：** `apply_template` 会迁移源 PPT 中所有幻灯片的动画时间轴结构（入场顺序、延迟、触发方式），但由于幻灯片形状 ID 在模板套用过程中会重新分配，部分动画的目标形状可能需要在 PowerPoint 里手动重新绑定。切换效果（Transitions）和备注（Speaker Notes）均完整保留。
+> ℹ️ **动画保留说明：** `apply_template` 会迁移源 PPT 中所有幻灯片的动画时间轴结构，但形状 ID 会重新分配，部分动画需在 PowerPoint 中手动重绑。备注（Speaker Notes）完整保留。
 
 ---
 
-### 阶段 A：内容提取 + AI 审校纠错
+### 阶段 0: AI 内容深度理解
 
-**Step A1 — 提取源 PPT 内容**
+**AI 必须理解的内容维度：**
+
+1. **页面语义** — 这页在讲什么？核心观点是什么？
+2. **内容类型** — 产品介绍 / 数据分析 / 流程说明 / 概念讲解 / 对比分析 / 时间线 / 问题解决
+3. **逻辑关系** — 因果关系？并列关系？递进关系？对比关系？
+4. **关键元素** — 有哪些数据？有哪些需要强调的概念？有哪些需要解释的术语？
+5. **视觉线索** — 原 PPT 中的图形、表格、图片代表什么含义？
+
+**Step 0-1 — 提取源 PPT 完整信息**
 
 ```bash
+# 提取文字内容（JSON 格式，包含每页的 title、body、type 等）
 python scripts/extract_content.py source.pptx --output content.json
-```
 
-同时获取缩略图以便理解原始视觉结构：
-
-```bash
+# 生成缩略图（帮助 AI 理解原始视觉结构）
 python scripts/thumbnail.py source.pptx source_thumb/
 ```
 
-**Step A2 — AI 内容审校（必做步骤）**
+**Step 0-2 — AI 深度分析（必须执行）**
 
-读取 `content.json` 后，作为 AI 你必须对每一页内容执行以下审校：
-
-**审校任务列表：**
-
-1. **标题完整性** — 检查每页 `title` 是否为空或过短（< 3字）；若为空则根据 body 内容推断补写
-2. **正文内容纠错** — 检查 `body` 文本中的：
-   - 明显错别字、标点错误
-   - 截断/不完整的句子（常见于 OCR 识别源或复制粘贴）
-   - 重复词语或重复要点
-3. **页面类型判断** — 结合 `title`/`body`/`subtitle` 判断每页是否被正确分类（`type` 字段）；如 section 页被误识别为 content，应修正
-4. **要点精简** — 若某页 `body` 超过 6 条要点，分析是否可以合并；超过 8 条要点时必须合并
-5. **内容一致性** — 跨页检查：前后页提到相同概念时表述是否一致（如产品名、数字、缩写）
-6. **缺失内容补全** — 若第一页无标题/副标题，根据全文主题推断补写；若结语页内容为空，补写一句话
-
-**AI 审校输出格式：**
-
-审校完成后，将修改后的内容以**对比形式**展示给用户：
+读取 `content.json` 和缩略图后，AI 需要对每一页回答以下问题：
 
 ```
-📋 内容审校报告
+第 N 页分析：
+- 页面标题：「」
+- 核心内容：「」
+- 内容类型：[产品介绍/数据分析/流程说明/概念讲解/对比分析/时间线/问题解决/章节过渡/结语]
+- 关键信息：[列出需要强调的数据/概念/术语]
+- 逻辑结构：[因果/并列/递进/对比/总分的哪一种]
+- 与前后页关系：[如何过渡到下一页]
+```
 
-第 2 页（原类型: content）
-  标题: "产品介绍" → 无变化
-  正文修改:
-    原: "用户可以通过以下方式访问系功能..."
-    改: "用户可以通过以下方式访问系统功能..." [纠正错别字]
-    原: 8条要点（超出限制）
-    改: 合并为6条 [精简]
+**展示给用户的格式：**
 
-第 5 页（原类型: section）
-  发现问题: type 被识别为 content，实为 section 过渡页
-  修正: type → "section"
+```
+📊 AI 内容分析报告
 
-[若无修改] 第 3 页 — 无问题 ✓
+第 1 页：封面
+  类型：封面
+  核心内容：公司年度汇报
+  AI 判断：适合居中大标题 + 副标题布局
+
+第 2 页：年度业绩概览
+  类型：数据分析
+  核心内容：全年营收增长 25%，主要来源三大业务线
+  关键数据：25% 增长率、三大业务线
+  逻辑结构：总分结构
+  AI 判断：适合图表 + 要点组合布局，数据页优先
+
+第 3 页：业务线一 — 产品销售
+  类型：产品介绍 + 数据分析
+  核心内容：产品线A营收占比40%，同比增长30%
+  与前页关系：详细展开第一大业务线
+  AI 判断：适合左右分栏（左侧图表，右侧要点）
+
 ...
-
-共审校 N 页，发现 M 处问题，已修正。是否继续套入模板？
 ```
-
-**展示审校报告后，等待用户确认（"继续" / 或指出不同意见）再进入阶段 B。**
-
-用户如有不同意见，按用户指示调整后再继续。
 
 ---
 
-### 阶段 B：套入模板（脚本执行）
+### 阶段 1: AI 内容优化
 
-**Step B1 — 分析模板**
+基于阶段 0 的分析，AI 执行以下优化：
 
-```bash
-# 查看模板布局缩略图
-python scripts/thumbnail.py template.pptx template_thumb/
+| 优化类型 | 说明 | 示例 |
+|---------|------|------|
+| **错别字纠正** | OCR 或复制粘贴导致的错误 | "系功能" → "系统功能" |
+| **语句完善** | 不通顺、不完整的句子 | 补全截断的句子 |
+| **结构优化** | 调整要点顺序，合并相似项 | 8条要点 → 6条核心要点 |
+| **内容补充** | AI 认为缺失但重要的信息 | 添加背景说明、数据来源 |
+| **一致性检查** | 跨页术语、数字、缩写统一 | 全文统一产品名称 |
 
-# 查看模板文字结构
-python -m markitdown template.pptx
+**Step 1 — AI 内容优化（展示对比报告）**
+
+```
+📋 AI 内容优化报告
+
+第 2 页
+  ❌ 错别字：
+    原：「用户可以通过以下方式访问系功能」
+    改：「用户可以通过以下方式访问系统功能」
+  
+  ❌ 语句不完整：
+    原：「由于市场竞争加剧，」
+    改：「由于市场竞争加剧，公司需要调整策略应对挑战」[补全因果]
+
+  ⚡ 内容补充（AI 建议）：
+    建议补充：「数据来源：2024年财报」
+    理由：数据页应标注来源，增强可信度
+
+第 5 页
+  ❌ 结构优化：
+    原：8条要点
+    改：合并为6条核心要点
+    理由：超过6条听众难以记忆，AI 合并相似项
+
+...
 ```
 
-**Step B2 — 执行套模板**
+**等待用户确认后执行优化**
+
+---
+
+### 阶段 2: AI 智能布局设计
+
+这是**核心差异点**。AI 不是随机分配布局，而是根据内容类型选择最佳方案。
+
+**布局匹配规则：**
+
+| 内容类型 | 推荐的模板布局 | 原因 |
+|---------|--------------|------|
+| 数据分析 + 数字 | 图表占主导 + 右侧/底部要点 | 数据是核心 |
+| 产品介绍 | 图文并茂（左侧图，右侧文） | 视觉+说明 |
+| 流程说明 | 时间轴或步骤流 | 线性逻辑 |
+| 对比分析 | 左右两栏对比 | 并列关系 |
+| 概念讲解 | 图标 + 要点 | 简洁清晰 |
+| 问题解决 | 漏斗或金字塔 | 结构化思维 |
+| 章节过渡 | 居中大标题 | 承上启下 |
+
+**Step 2 — AI 布局映射方案**
+
+```
+🎨 AI 布局映射报告
+
+源 PPT 第 N 页 → 模板布局选择方案
+
+第 1 页（封面）
+  内容类型：封面
+  选择布局：「封面页」模板
+  理由：封面应有 Logo + 居中标题 + 日期
+
+第 2 页（年度业绩）
+  内容类型：数据分析
+  选择布局：「图表+要点」布局
+  理由：数据是核心，需要图表区域 + 解读区域
+  具体分配：
+    - 主区域：图表（柱状图展示增长率）
+    - 副区域：3个关键要点解读
+
+第 3 页（业务线详情）
+  内容类型：产品介绍
+  选择布局：「左图右文」布局
+  理由：左侧展示产品图，右侧详细说明
+
+第 4-5 页（团队与流程）
+  内容类型：流程说明
+  选择布局：「时间轴」布局
+  理由：展示发展历程或工作流程
+
+...
+```
+
+**等待用户确认后执行阶段 3**
+
+---
+
+### 阶段 3: 执行模板套用
+
+根据阶段 2 的 AI 决策，执行脚本：
 
 ```bash
+# 基于 AI 决策的布局映射，执行模板套用
 python scripts/apply_template.py source.pptx template.pptx output.pptx
-```
 
-**进阶：添加最终 AI 美化**
-```bash
-# 在套模板完成后，对输出进行完整的设计美化（重新设计布局、配色、字体、表格等）
+# 进阶：完整美化（重新设计布局 + 配色 + 字体 + 表格）
 python scripts/apply_template.py source.pptx template.pptx output.pptx --beautify
 
 # 指定美化主题
@@ -377,177 +478,95 @@ python scripts/apply_template.py source.pptx template.pptx output.pptx --beautif
 ```
 
 脚本自动完成：
-1. 从源 PPT 提取文字、图片、格式（bold/italic/size）
-2. 解包模板，为每页源幻灯片找到最匹配的模板布局
-3. 将内容注入模板占位符，使用模板配色/字体
-4. **自动替换自定义形状和表格颜色** — 所有非占位符元素（装饰形状、表格、SmartArt等）自动使用模板配色
-5. **自动美化排版** — 标题截短（>20字）、要点合并（>6条）、段落行距优化
-6. 迁移动画时间轴结构和 Speaker Notes
-7. 打包输出文件
+1. 提取源 PPT 文字、图片、格式
+2. 按 AI 决策映射布局
+3. 注入内容，使用模板配色/字体
+4. 自动替换形状、表格、SmartArt 颜色
+5. 迁移动画时间轴结构和 Speaker Notes
+6. 打包输出
 
-> **如需覆盖自动映射方案：**
-> ```bash
-> python scripts/apply_template.py source.pptx template.pptx output.pptx --dry-run
-> # 查看映射方案，保存到文件
-> python scripts/apply_template.py source.pptx template.pptx output.pptx --dry-run --save-mapping mapping.json
-> # 编辑 mapping.json 后使用自定义映射执行
-> python scripts/apply_template.py source.pptx template.pptx output.pptx --mapping mapping.json
-> ```
+---
 
-**Step B3 — 生成输出缩略图，准备 AI 美化**
+### 阶段 4: AI 备注生成
+
+**AI 备注的独特价值：**
+
+| 传统备注 | AI 生成备注 |
+|---------|------------|
+| 复制正文 | 提炼核心观点 |
+| 无演讲提示 | 提供演讲节奏建议 |
+| 无过渡引导 | 设计页间过渡 |
+| 无受众意识 | 考虑听众可能的问题 |
+
+**Step 4 — 生成 AI 备注**
 
 ```bash
-python scripts/thumbnail.py output.pptx output_thumb/
+# 使用 AI 后端生成高质量备注
+python scripts/generate_notes.py output.pptx output.pptx --append-summary --backend openai --api-key sk-xxx
+
+# 或使用本地 Ollama
+python scripts/generate_notes.py output.pptx output.pptx --append-summary --backend ollama --model llama3
+```
+
+**AI 备注结构示例：**
+
+```
+──── 原有备注（保留）────
+[用户原来写的备注内容]
+
+──── AI 备注 ─────
+【核心要点】
+• 本页最重要的 2-3 个观点
+• 听众应该记住什么
+
+【演讲提示】
+• 建议在此处停顿 2 秒
+• 可以用一个具体案例/数据支撑
+• 语调建议：强调关键数字
+
+【过渡引导】
+• 从本页到下一页的过渡语建议：
+• 「基于上述分析，接下来我们看...」
+• 「除了 X，还有另一个重要方面...」
 ```
 
 ---
 
-### 阶段 C：AI 逐页美化调整
+### 最终输出
 
-套模板脚本完成后，AI 需要对输出 PPT **逐页进行内容感知的排版优化**。这是纯文字/XML 层面的精调，不调用外部渲染工具。
+经过五阶段 AI 处理后的 PPT：
 
-**Step C1 — 解包输出文件**
-
-```bash
-python scripts/office/unpack.py output.pptx output_unpacked/
-```
-
-**Step C2 — AI 逐页分析 + 优化**
-
-针对每一页幻灯片（`output_unpacked/ppt/slides/slideN.xml`），执行以下判断和处理：
-
-#### 美化规则 — 按页面类型
-
-**封面页 / 标题页（type: title）**
-- 检查 title 字数：若超过 20 字，建议截短主标题，将剩余部分移入 subtitle（用 `patch_slide.py` 修改）
-- 检查 subtitle 是否存在：若无 subtitle 但 body 有内容，将 body 第一条提升为 subtitle
-- 标题文字应 bold，字号 ≥ 36pt；若小于此值，使用 patch_slide.py 调整
-
-**内容页（type: content）**
-- 要点数量：4-6 条最佳；若 ≤ 3 条，可保持不变或加一句引导语；若超 6 条，合并相似条目
-- 每条要点字数：建议 ≤ 25 字；若某条超过 40 字，拆分成两条
-- 检查是否有「孤行」（body 第一行是大标题式文字而非要点）—— 若有，将其提升为幻灯片 title（若当前 title 为空）或作为独立 subtitle
-- 若 `has_images: true`，保留图片；检查正文是否为图注格式（短句），若是则字号不低于 14pt
-
-**章节页（type: section）**
-- body 内容通常应为空或一句话；若 body 超过 2 条，将其移到下一页（新建 content 页）并清空当前页 body
-- title 居中对齐时检查 `<a:pPr algn="ctr">`；若不居中，不强制修改（保持模板默认）
-
-**结语页（type: end / conclusion）**
-- 若 title 为"谢谢"/"Thank You"/"END"等，body 若为空则补充一句简短结语（可使用 AI 生成）
-- 若 body 有多余联系方式信息，移动到 notes（Speaker Notes）而非幻灯片正文
-
-**所有页面通用检查**
-- 连续 3 页布局类型相同：第 3 页建议切换为不同的模板 layout（通过 `--mapping` 参数在下次运行时调整；或在 XML 中修改 layout 关联）
-- 空行清理：删除 body 中首尾多余的空行（`<a:p><a:endParaRPr/></a:p>`）
-- 若某页 body 和 title 均为空：标记为"疑似多余页"，提示用户确认是否保留
-
-**Step C3 — 应用优化**
-
-使用 `patch_slide.py` 批量修改文字：
-
-```bash
-# 修改特定页面文字
-python scripts/patch_slide.py output.pptx --find "原文字" --replace "新文字"
-```
-
-对于结构性调整（调整段落数量、移动内容）使用 XML 直接编辑：
-
-```bash
-python scripts/office/unpack.py output.pptx output_unpacked/
-# 编辑 output_unpacked/ppt/slides/slideN.xml
-python scripts/office/pack.py output_unpacked/ output_final.pptx --original template.pptx
-```
-
-**Step C-Notes — 备注增强（保留原备注 + 追加 AI 摘要）**
-
-套模板后，每页备注需要在**保留源 PPT 原有备注**的基础上，追加 AI 生成的内容摘要，方便演讲者快速查看当页核心。
-
-```bash
-# 最简用法（规则摘要，无需 API）
-python scripts/generate_notes.py output_final.pptx output_final.pptx --append-summary
-
-# 使用 OpenAI 生成更高质量摘要
-python scripts/generate_notes.py output_final.pptx output_final.pptx --append-summary --backend openai --api-key sk-xxx
-
-# 使用本地 Ollama
-python scripts/generate_notes.py output_final.pptx output_final.pptx --append-summary --backend ollama --model llama3
-```
-
-生成后每页备注结构如下：
-
-```
-[原有备注内容（从源 PPT 迁移的演讲稿、说明等，原样保留）]
-
-────────────────────────
-【AI 摘要】
-
-本页核心：产品核心功能介绍
-要点：多租户架构；弹性扩缩容；一键部署；安全审计。
-（含图表）
-```
-
-> ℹ️ **智能去重：** 若已运行过 `--append-summary`，再次执行时脚本会自动检测备注中是否已含「AI 摘要」标记，跳过已处理的页面，避免重复追加。
-
-**Step C4 — AI 美化报告**
-
-完成逐页调整后，向用户展示：
-
-```
-✨ 逐页美化报告
-
-第 1 页（封面）
-  ✓ 标题 "产品年度发布会2024" → 已截短为 "产品年度发布会" + subtitle "2024"
-  ✓ 去除首部2个空段落
-
-第 3 页（内容）
-  ✓ 将8条要点合并为5条（删除重复的第6、7条）
-  ✓ 第2条要点拆分（原超55字）
-
-第 6 页（章节）
-  ✓ 移除多余 body 内容（已移至第7页开头）
-
-第 8 页（结语）
-  ✓ 补充结语：「感谢您的关注，期待与您的合作。」
-
-共处理 N 页，N 处调整已完成。
-```
-
-**Step C5 — 最终 QA**
-
-```bash
-# 内容完整性检查
-python -m markitdown output_final.pptx
-
-# 视觉检查缩略图
-python scripts/thumbnail.py output_final.pptx final_thumb/
-
-# 质量评分
-python scripts/qa_check.py output_final.pptx
-```
+✓ **内容准确** — AI 纠错、完善、补充
+✓ **布局合理** — AI 根据内容类型选择最佳方案
+✓ **视觉专业** — 模板配色、字体、间距统一
+✓ **备注完善** — AI 生成洞察性演讲备注
+✓ **动画保留** — 时间轴结构完整迁移
 
 ---
 
 ### 完整命令速查
 
 ```bash
-# 阶段 A: 提取内容
+# 阶段 0: 提取内容
 python scripts/extract_content.py source.pptx --output content.json
 python scripts/thumbnail.py source.pptx source_thumb/
-# → AI 审校 content.json，向用户展示修改报告，等待确认
+# → AI 深度分析 content.json，展示分析报告
 
-# 阶段 B: 套入模板
-python scripts/thumbnail.py template.pptx template_thumb/
-python scripts/apply_template.py source.pptx template.pptx output.pptx
-python scripts/thumbnail.py output.pptx output_thumb/
+# 阶段 1: AI 内容优化
+# → AI 展示优化报告，等待用户确认
+# → 执行优化
 
-# 阶段 C: 逐页美化 + 备注增强
-python scripts/office/unpack.py output.pptx output_unpacked/
-# → AI 逐页分析 XML，执行排版优化
-python scripts/office/pack.py output_unpacked/ output_final.pptx --original template.pptx
-# → 保留原备注，追加 AI 摘要（智能去重，可安全重复执行）
-python scripts/generate_notes.py output_final.pptx output_final.pptx --append-summary
-python scripts/qa_check.py output_final.pptx
+# 阶段 2: AI 布局设计
+# → AI 展示布局映射方案，等待用户确认
+
+# 阶段 3: 执行模板套用
+python scripts/apply_template.py source.pptx template.pptx output.pptx --beautify
+
+# 阶段 4: AI 备注生成
+python scripts/generate_notes.py output.pptx output.pptx --append-summary --backend openai --api-key sk-xxx
+
+# QA 检查
+python scripts/qa_check.py output.pptx
 ```
 
 ---
@@ -667,6 +686,37 @@ python scripts/beautify_ppt.py source.pptx output.pptx --theme minimal --no-rest
 | `--smart-icons` | Auto-insert icons based on content keywords |
 | `--verbose` | Show detailed processing information |
 | `--list-themes` | Display all available themes and exit |
+
+### 图形 AI 换色 (color_ppt.py)
+
+当需要对原 PPT 中的**所有图形/形状进行智能配色替换**时（不仅仅是文字和背景），使用 `color_ppt.py`。它直接操作 PPTX 内部的 XML 结构，使用智能颜色分类来保持视觉层次。
+
+```bash
+# 使用默认主题 (executive)
+python scripts/color_ppt.py source.pptx output.pptx
+
+# 指定目标主题
+python scripts/color_ppt.py source.pptx output.pptx --theme tech
+
+# 显示详细进度
+python scripts/color_ppt.py source.pptx output.pptx --verbose
+```
+
+**支持的主题：** executive | tech | creative | warm | minimal | bold | nature | ocean | elegant | modern | sunset | forest
+
+**支持的颜色类型：**
+- 填充色（solidFill, gradientFill）
+- 线条色（ln/outline stroke）
+- 背景色（bg fill）
+
+**支持的形状类型：**
+- 矩形、圆形、箭头、线条
+- SmartArt 图形
+- 图表元素
+- 表格单元格
+- 占位符背景
+
+> **注意：** `color_ppt.py` 直接操作 XML/zipfile，适合需要精细控制颜色替换的场景。如果只需要整体美化，使用 `beautify_ppt.py`。
 
 **Step 4 — Review and iterate**
 
@@ -1043,6 +1093,8 @@ Output format:
 > - `body_rich` — 带层级结构的正文（含 bold、italic、size、color 格式信息）
 > - `shape_count` — 当前页的形状（`<p:sp>`）总数，可用于判断页面复杂度
 > - `background_color` — 幻灯片背景色十六进制值（如 `1A1A2E`），无背景色时为空字符串
+>
+> **模板套用行为说明：** 当 JSON 中某页的 `title` 字段为空时，`apply_template.py` 会自动使用 `body[0]` 作为标题内容，同时 `body` 从 `body[1]` 开始注入正文区域。无需手动修复 JSON 中的 title 字段。
 >
 > 处理有表格、需要按文件名定位幻灯片或精确版式匹配的场景时，请直接读取完整 JSON 输出。
 
