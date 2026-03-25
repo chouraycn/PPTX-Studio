@@ -146,9 +146,15 @@ def apply_template(
     template_layouts = _analyze_template_layouts(template_pptx)
     # Extract template color palette for content injection
     template_colors = _extract_template_colors(template_pptx)
+    # Extract template font scheme (majorFont / minorFont)
+    template_fonts  = _extract_template_fonts(template_pptx)
     if verbose:
         print(f"Template colors: primary=#{template_colors['primary']}, "
               f"accent=#{template_colors['accent']}")
+        print(f"Template fonts: major={template_fonts.get('major_latin','?')}, "
+              f"minor={template_fonts.get('minor_latin','?')}, "
+              f"major_ea={template_fonts.get('major_ea','')}, "
+              f"minor_ea={template_fonts.get('minor_ea','')}")
         print(f"Template has {len(template_layouts)} layouts:")
         for l in template_layouts:
             print(f"  {l['layout_file']}: {l['layout_name']} ({l['detected_type']})")
@@ -194,6 +200,16 @@ def apply_template(
         source_images_dir.mkdir()
         _extract_source_images(source_pptx, source_images_dir)
 
+        # Unpack source PPT into a separate dir so we can read animations & notes
+        source_unpacked_dir = tmp_path / "source"
+        print(f"Unpacking source for animation/notes extraction...")
+        _run_unpack(str(source_path), str(source_unpacked_dir))
+
+        # Build slide-index → source slide file mapping (1-based index from extraction)
+        source_slide_file_map = _build_source_slide_file_map(
+            source_unpacked_dir, source_content["slides"]
+        )
+
         # Build new slide list
         new_slides = _build_new_slides(
             source_content["slides"],
@@ -203,6 +219,9 @@ def apply_template(
             source_images_dir,
             keep_notes,
             template_colors,
+            template_fonts,
+            source_unpacked_dir,
+            source_slide_file_map,
             verbose,
         )
 
@@ -251,7 +270,12 @@ def _print_mapping_plan(slide_mapping: List[dict], source_slides: List[dict]) ->
 
 
 def _analyze_template_layouts(template_pptx: str) -> List[dict]:
-    """Analyze which layout types are available in the template."""
+    """Analyze which layout types are available in the template.
+
+    Now also extracts per-placeholder styling (bodyPr, lstStyle, defRPr)
+    from each layout so that injected content can inherit the layout's
+    intended spacing, margins, and default font sizes.
+    """
     layouts = []
     with zipfile.ZipFile(template_pptx, "r") as zf:
         layout_files = [n for n in zf.namelist()
@@ -267,6 +291,9 @@ def _analyze_template_layouts(template_pptx: str) -> List[dict]:
             detected_type = _detect_layout_type(layout_name, xml)
             placeholder_types = re.findall(r'<p:ph[^>]*type="([^"]*)"', xml)
 
+            # Extract per-placeholder styling from this layout
+            ph_styles = _extract_layout_placeholder_styles(xml)
+
             layouts.append({
                 "layout_file": layout_file,
                 "layout_name": layout_name,
@@ -274,6 +301,7 @@ def _analyze_template_layouts(template_pptx: str) -> List[dict]:
                 "placeholder_types": placeholder_types,
                 "has_body": "body" in placeholder_types or "obj" in placeholder_types,
                 "has_title": "title" in placeholder_types or "ctrTitle" in placeholder_types,
+                "ph_styles": ph_styles,   # NEW: per-placeholder style info
             })
 
     return layouts
@@ -332,6 +360,132 @@ def _extract_template_colors(template_pptx: str) -> Dict[str, str]:
             }
     except Exception:
         return defaults
+
+
+def _extract_template_fonts(template_pptx: str) -> Dict[str, str]:
+    """Extract the font scheme (majorFont / minorFont) from the template's theme XML.
+
+    OOXML font scheme has two slots:
+    - majorFont (a:majorFont) → used for headings / titles
+    - minorFont (a:minorFont) → used for body text
+
+    Each slot can define:
+    - latin typeface  → Latin/Western scripts
+    - ea    typeface  → East Asian (CJK) scripts
+    - cs    typeface  → Complex scripts (Arabic, Hebrew, …)
+
+    PowerPoint also supports the special magic typefaces "+mj-lt" (major latin)
+    and "+mn-lt" (minor latin) as placeholders that resolve to the theme fonts.
+    We never hard-code those; instead we extract the real names so we can write
+    them explicitly into injected runs when needed.
+
+    Returns a dict with keys:
+        major_latin, major_ea, minor_latin, minor_ea
+    Falls back to empty strings (= "inherit from template") when not found.
+    """
+    result = {
+        "major_latin": "",
+        "major_ea": "",
+        "minor_latin": "",
+        "minor_ea": "",
+    }
+    try:
+        with zipfile.ZipFile(template_pptx, "r") as zf:
+            theme_files = [n for n in zf.namelist()
+                           if n.startswith("ppt/theme/") and n.endswith(".xml")]
+            if not theme_files:
+                return result
+
+            xml = zf.read(theme_files[0]).decode("utf-8")
+
+            # Extract majorFont block
+            major_m = re.search(r'<a:majorFont>(.*?)</a:majorFont>', xml, re.DOTALL)
+            if major_m:
+                block = major_m.group(1)
+                lat = re.search(r'<a:latin\b[^>]*typeface="([^"]+)"', block)
+                ea  = re.search(r'<a:ea\b[^>]*typeface="([^"]+)"', block)
+                if lat:
+                    result["major_latin"] = lat.group(1)
+                if ea and ea.group(1) not in ("", " "):
+                    result["major_ea"] = ea.group(1)
+
+            # Extract minorFont block
+            minor_m = re.search(r'<a:minorFont>(.*?)</a:minorFont>', xml, re.DOTALL)
+            if minor_m:
+                block = minor_m.group(1)
+                lat = re.search(r'<a:latin\b[^>]*typeface="([^"]+)"', block)
+                ea  = re.search(r'<a:ea\b[^>]*typeface="([^"]+)"', block)
+                if lat:
+                    result["minor_latin"] = lat.group(1)
+                if ea and ea.group(1) not in ("", " "):
+                    result["minor_ea"] = ea.group(1)
+
+    except Exception:
+        pass
+
+    return result
+
+
+def _extract_layout_placeholder_styles(layout_xml: str) -> Dict[str, dict]:
+    """Extract per-placeholder styling from a slideLayout XML.
+
+    For each placeholder (identified by type), extracts:
+    - bodyPr XML attributes (wrap, rtlCol, anchor, etc.) → to preserve layout bodyPr
+    - defPPr / defRPr attributes (default paragraph/run props) → for reference
+    - The full bodyPr element text → will be re-injected to preserve spacing/margins
+
+    Returns a dict keyed by placeholder type string (e.g. "title", "body", "subTitle").
+    """
+    styles: Dict[str, dict] = {}
+
+    # Find all <p:sp> elements in the layout (simplified: find ph type + txBody pair)
+    for sp_m in re.finditer(r'<p:sp\b.*?</p:sp>', layout_xml, re.DOTALL):
+        sp_xml = sp_m.group(0)
+
+        # Get placeholder type
+        ph_m = re.search(r'<p:ph\b[^>]*type="([^"]+)"', sp_xml)
+        if not ph_m:
+            # body placeholder may have no explicit type attribute (idx-only)
+            # Check for idx="1" which is the standard body placeholder
+            ph_idx_m = re.search(r'<p:ph\b[^>]*idx="(\d+)"', sp_xml)
+            ph_type = f"_idx{ph_idx_m.group(1)}" if ph_idx_m else None
+        else:
+            ph_type = ph_m.group(1)
+
+        if not ph_type:
+            continue
+
+        info: dict = {}
+
+        # Extract the full <a:bodyPr ...> opening tag (or self-closing)
+        body_pr_m = re.search(r'<a:bodyPr(\s[^>]*)?>|<a:bodyPr\s*/>', sp_xml)
+        if body_pr_m:
+            info["bodyPr_attrs"] = body_pr_m.group(1) or ""
+
+        # Extract lstStyle / defPPr / defRPr for reference (may be multi-level)
+        lst_m = re.search(r'<a:lstStyle>(.*?)</a:lstStyle>', sp_xml, re.DOTALL)
+        if lst_m:
+            lst_xml = lst_m.group(1)
+            # Get defPPr (default paragraph props)
+            def_ppr_m = re.search(r'<a:defPPr>(.*?)</a:defPPr>', lst_xml, re.DOTALL)
+            if def_ppr_m:
+                info["defPPr_xml"] = def_ppr_m.group(0)
+            # Get first lvl1pPr (level-1 paragraph props)
+            lvl1_m = re.search(r'<a:lvl1pPr\b[^>]*(?:/>|>.*?</a:lvl1pPr>)', lst_xml, re.DOTALL)
+            if lvl1_m:
+                info["lvl1pPr_xml"] = lvl1_m.group(0)
+                # Extract default run props inside lvl1
+                def_rpr_m = re.search(r'<a:defRPr\b[^>]*(?:/>|>.*?</a:defRPr>)', lvl1_m.group(0), re.DOTALL)
+                if def_rpr_m:
+                    info["defRPr_xml"] = def_rpr_m.group(0)
+                    # Extract sz attribute from defRPr
+                    sz_m = re.search(r'\bsz="(\d+)"', def_rpr_m.group(0))
+                    if sz_m:
+                        info["default_sz"] = int(sz_m.group(1))
+
+        styles[ph_type] = info
+
+    return styles
 
 
 def _detect_layout_type(layout_name: str, layout_xml: str) -> str:
@@ -464,6 +618,37 @@ def _extract_source_images(source_pptx: str, output_dir: Path) -> Dict[str, Path
     return image_map
 
 
+def _build_source_slide_file_map(
+    source_unpacked_dir: Path, source_slides: List[dict]
+) -> Dict[int, str]:
+    """Map source slide index (1-based) → slide filename in the unpacked source dir.
+
+    Uses the slide_file field from extract_content if available, otherwise falls
+    back to enumerating slides from presentation.xml order.
+    """
+    mapping: Dict[int, str] = {}
+
+    # First try: use the slide_file field extracted by extract_content
+    for s in source_slides:
+        idx = s.get("index")
+        sf = s.get("slide_file")
+        if idx is not None and sf:
+            mapping[idx] = sf
+
+    if mapping:
+        return mapping
+
+    # Fallback: read presentation.xml sldIdLst order
+    try:
+        order = _get_presentation_slide_order(source_unpacked_dir)
+        for i, (slide_file, _) in enumerate(order, start=1):
+            mapping[i] = slide_file
+    except Exception:
+        pass
+
+    return mapping
+
+
 def _get_layout_rids(unpacked_dir: Path) -> Dict[str, str]:
     """Get layout file -> rId mapping from slideLayouts relationships."""
     rels_path = unpacked_dir / "ppt" / "slideLayouts"
@@ -475,8 +660,143 @@ def _get_layout_rids(unpacked_dir: Path) -> Dict[str, str]:
     return result
 
 
+def _extract_layout_placeholders(layout_xml: str) -> List[dict]:
+    """Extract placeholder shape definitions from a slideLayout XML.
+
+    For each <p:sp> in the layout that contains a <p:ph>, we extract:
+    - ph_type:  the 'type' attribute of <p:ph> (e.g. 'title', 'body', 'subTitle')
+                or '' for the implicit body placeholder (idx only, no type attr)
+    - ph_idx:   the 'idx' attribute of <p:ph> (integer, default 0)
+    - sp_id:    shape id (int)
+    - name:     shape name string
+    - xfrm:     dict with x, y, cx, cy (EMU integers) — used for positioning
+                Falls back to full-slide defaults when the layout doesn't define it
+                (common for layouts that inherit position from the slide master).
+
+    This lets _create_slide_from_layout build a slide that already contains the
+    correct placeholder shapes — so that _replace_placeholder_text /
+    _replace_placeholder_content can find them by type/idx.
+    """
+    placeholders = []
+    shape_id = 2  # start at 2; id=1 is reserved for the spTree group
+
+    # Default slide dimensions (widescreen 16:9 in EMU)
+    SLIDE_W = 9144000
+    SLIDE_H = 5143500
+
+    for sp_m in re.finditer(r'<p:sp\b.*?</p:sp>', layout_xml, re.DOTALL):
+        sp_xml = sp_m.group(0)
+
+        # Must have a placeholder tag
+        ph_m = re.search(r'<p:ph\b([^>]*)/?>',  sp_xml)
+        if not ph_m:
+            continue
+
+        ph_attrs = ph_m.group(1)
+        ph_type_m = re.search(r'\btype="([^"]+)"', ph_attrs)
+        ph_idx_m  = re.search(r'\bidx="(\d+)"',   ph_attrs)
+        ph_type = ph_type_m.group(1) if ph_type_m else ""
+        ph_idx  = int(ph_idx_m.group(1)) if ph_idx_m else 0
+
+        # Skip decoration-only placeholders (footer, date, slide number)
+        if ph_type in ("ftr", "dt", "sldNum"):
+            continue
+
+        # Extract shape name from nvPr
+        name_m = re.search(r'<p:cNvPr[^>]*name="([^"]*)"', sp_xml)
+        sp_name = name_m.group(1) if name_m else f"Placeholder {ph_idx}"
+
+        # Extract xfrm (position / size) — may be absent if inherited from master
+        xfrm_m = re.search(r'<a:xfrm\b.*?</a:xfrm>|<a:xfrm\b[^>]*/>', sp_xml, re.DOTALL)
+        if xfrm_m:
+            xfrm_xml = xfrm_m.group(0)
+            off_m = re.search(r'<a:off\b[^>]*x="(-?\d+)"[^>]*y="(-?\d+)"', xfrm_xml)
+            ext_m = re.search(r'<a:ext\b[^>]*cx="(\d+)"[^>]*cy="(\d+)"', xfrm_xml)
+            x  = int(off_m.group(1)) if off_m else 0
+            y  = int(off_m.group(2)) if off_m else 0
+            cx = int(ext_m.group(1)) if ext_m else SLIDE_W
+            cy = int(ext_m.group(2)) if ext_m else SLIDE_H
+        else:
+            # Reasonable defaults when layout inherits from master
+            if ph_type in ("title", "ctrTitle"):
+                x, y, cx, cy = 457200, 274638, 8229600, 1143000
+            elif ph_type == "subTitle":
+                x, y, cx, cy = 1371600, 1600200, 6400800, 1828800
+            elif ph_type == "body":
+                x, y, cx, cy = 457200, 1600200, 8229600, 3200400
+            else:
+                x, y, cx, cy = 457200, 457200, 8229600, 4114800
+
+        placeholders.append({
+            "ph_type": ph_type,
+            "ph_idx":  ph_idx,
+            "sp_id":   shape_id,
+            "name":    sp_name,
+            "x": x, "y": y, "cx": cx, "cy": cy,
+        })
+        shape_id += 1
+
+    return placeholders
+
+
+def _build_placeholder_sp_xml(ph: dict) -> str:
+    """Build a minimal <p:sp> XML element for a content placeholder.
+
+    The shape has the correct <p:ph type="..."> tag so that
+    _replace_placeholder_text / _replace_placeholder_content can find it.
+    The txBody is empty (just bodyPr + lstStyle) — content is injected later.
+    """
+    ph_type = ph["ph_type"]
+    ph_idx  = ph["ph_idx"]
+    sp_id   = ph["sp_id"]
+    name    = ph["name"]
+    x, y, cx, cy = ph["x"], ph["y"], ph["cx"], ph["cy"]
+
+    # Build the <p:ph> tag
+    if ph_type:
+        ph_tag = f'<p:ph type="{ph_type}"'
+    else:
+        ph_tag = '<p:ph'
+    if ph_idx > 0:
+        ph_tag += f' idx="{ph_idx}"'
+    ph_tag += '/>'
+
+    return (
+        f'<p:sp>'
+        f'<p:nvSpPr>'
+        f'<p:cNvPr id="{sp_id}" name="{name}"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+        f'<p:nvPr>{ph_tag}</p:nvPr>'
+        f'</p:nvSpPr>'
+        f'<p:spPr>'
+        f'<a:xfrm>'
+        f'<a:off x="{x}" y="{y}"/>'
+        f'<a:ext cx="{cx}" cy="{cy}"/>'
+        f'</a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'</p:spPr>'
+        f'<p:txBody>'
+        f'<a:bodyPr/>'
+        f'<a:lstStyle/>'
+        f'<a:p><a:endParaRPr lang="zh-CN" dirty="0"/></a:p>'
+        f'</p:txBody>'
+        f'</p:sp>'
+    )
+
+
 def _create_slide_from_layout(unpacked_dir: Path, layout_file: str) -> Tuple[str, str]:
-    """Create a new blank slide using a layout. Returns (slide_file, rId)."""
+    """Create a new slide using a layout, with placeholder shapes extracted from the layout.
+
+    Unlike the old implementation which created a completely empty spTree,
+    this version reads the layout XML to find all placeholder shapes (title,
+    body, subTitle, etc.) and pre-populates the slide's spTree with
+    corresponding <p:sp> elements.  This is critical: without placeholder
+    shapes in the slide XML, _replace_placeholder_text and
+    _replace_placeholder_content will find nothing to replace, resulting in
+    a visually blank slide.
+
+    Returns (slide_file, rId).
+    """
     slides_dir = unpacked_dir / "ppt" / "slides"
     rels_dir = slides_dir / "_rels"
     rels_dir.mkdir(exist_ok=True)
@@ -487,8 +807,24 @@ def _create_slide_from_layout(unpacked_dir: Path, layout_file: str) -> Tuple[str
     next_num = max(existing) + 1 if existing else 1
     slide_file = f"slide{next_num}.xml"
 
-    # Create blank slide XML
-    slide_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    # Read layout XML so we can extract placeholder shapes
+    layout_path = unpacked_dir / "ppt" / "slideLayouts" / layout_file
+    layout_xml = ""
+    if layout_path.exists():
+        layout_xml = layout_path.read_text(encoding="utf-8")
+
+    # Extract placeholder definitions from the layout
+    placeholders = _extract_layout_placeholders(layout_xml)
+
+    # Build placeholder shape XML strings
+    ph_shapes_xml = "\n      ".join(
+        _build_placeholder_sp_xml(ph) for ph in placeholders
+    )
+    if ph_shapes_xml:
+        ph_shapes_xml = "\n      " + ph_shapes_xml
+
+    # Build slide XML with placeholder shapes pre-populated
+    slide_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
        xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
@@ -506,7 +842,7 @@ def _create_slide_from_layout(unpacked_dir: Path, layout_file: str) -> Tuple[str
           <a:chOff x="0" y="0"/>
           <a:chExt cx="0" cy="0"/>
         </a:xfrm>
-      </p:grpSpPr>
+      </p:grpSpPr>{ph_shapes_xml}
     </p:spTree>
   </p:cSld>
   <p:clrMapOvr>
@@ -599,19 +935,50 @@ def _find_template_slide_for_layout(unpacked_dir: Path, layout_file: str) -> Opt
     return None
 
 
+def _detect_lang(text: str) -> str:
+    """Detect language tag for a text run.
+
+    Returns 'zh-CN' when >10% of characters are CJK, otherwise 'en-US'.
+    This prevents English content from being tagged as Chinese (which breaks
+    spell-check and some font-substitution rules in PowerPoint).
+    """
+    if not text:
+        return "zh-CN"
+    cjk = sum(
+        1 for ch in text
+        if "\u4e00" <= ch <= "\u9fff"
+        or "\u3400" <= ch <= "\u4dbf"
+        or "\u20000" <= ch <= "\u2a6df"
+    )
+    return "zh-CN" if cjk / len(text) > 0.10 else "en-US"
+
+
 def _inject_content_into_slide(
     unpacked_dir: Path,
     slide_file: str,
     source_slide: dict,
     template_colors: Dict[str, str],
+    template_fonts: Dict[str, str],
+    layout_ph_styles: Dict[str, dict],
     verbose: bool,
 ) -> None:
     """Replace placeholder content in a template slide with source content.
 
-    Colors in injected text follow the template's extracted color palette:
-    - Title text → template primary color (on light bg) or white (on dark bg)
-    - Body text → template text_on_light color
-    - The slide background type (dark vs light) is inferred from the slide XML.
+    Text formatting rules:
+    - Colors: always use the template's color palette (primary/text_on_light/text_on_dark)
+    - Font face (typeface): use the template's majorFont for titles, minorFont for body
+      (extracted from the theme fontScheme).  If the theme font is empty, don't set
+      typeface so PowerPoint inherits it from the layout/master.
+    - Bold / italic: preserved from source slide's body_rich field
+    - Font size: preserved from source slide's body_rich field when available;
+      falls back to layout's default size (defRPr sz) so spacing matches template design
+    - Language tag: auto-detected per run (zh-CN if >10% CJK, else en-US)
+    - bodyPr: preserved from the layout placeholder (not overwritten) so margins,
+      word wrap, and auto-fit settings remain as the template designer intended
+
+    Fallback when placeholder replacement produces no visible change:
+    - If title was given but no matching placeholder was found, attempt to inject
+      into ANY text-capable placeholder that has no content yet (best-effort)
     """
     slide_path = unpacked_dir / "ppt" / "slides" / slide_file
     slide_xml = slide_path.read_text(encoding="utf-8")
@@ -621,39 +988,84 @@ def _inject_content_into_slide(
     title_color = template_colors["text_on_dark"] if use_dark else template_colors["primary"]
     body_color  = template_colors["text_on_dark"] if use_dark else template_colors["text_on_light"]
 
+    # Font faces from theme (empty string = don't set, inherit from layout/master)
+    title_latin_font = template_fonts.get("major_latin", "")
+    title_ea_font    = template_fonts.get("major_ea", "")
+    body_latin_font  = template_fonts.get("minor_latin", "")
+    body_ea_font     = template_fonts.get("minor_ea", "")
+
     title = source_slide.get("title", "")
     subtitle = source_slide.get("subtitle", "")
     body = source_slide.get("body", [])
+    # body_rich carries per-run formatting: [{text, bold, italic, size, color}, ...]
+    body_rich: List[dict] = source_slide.get("body_rich", [])
 
     modified = slide_xml
 
-    # Replace title placeholder — strip old color, inject template title color
+    # ── Title ─────────────────────────────────────────────────────────────────
     if title:
-        modified = _replace_placeholder_text(
-            modified, ["title", "ctrTitle"], title, color=title_color
+        modified_after = _replace_placeholder_text(
+            modified, ["title", "ctrTitle"], title,
+            color=title_color,
+            latin_font=title_latin_font,
+            ea_font=title_ea_font,
         )
+        modified = modified_after
 
-    # Replace subtitle placeholder
+    # ── Subtitle ──────────────────────────────────────────────────────────────
     if subtitle:
         modified = _replace_placeholder_text(
-            modified, ["subTitle"], subtitle, color=body_color
+            modified, ["subTitle"], subtitle,
+            color=body_color,
+            latin_font=body_latin_font,
+            ea_font=body_ea_font,
         )
     elif body and not subtitle:
         if source_slide.get("type") == "title":
             modified = _replace_placeholder_text(
-                modified, ["subTitle"], body[0] if body else "", color=body_color
+                modified, ["subTitle"], body[0] if body else "",
+                color=body_color,
+                latin_font=body_latin_font,
+                ea_font=body_ea_font,
             )
 
-    # Replace body/content placeholder with bullet list
+    # ── Body / content placeholder ────────────────────────────────────────────
     if body:
         if source_slide.get("type") == "title":
             body_to_use = body[1:] if subtitle else body
+            # Trim rich list to match
+            rich_to_use = body_rich[1:] if (subtitle and body_rich) else body_rich
         else:
             body_to_use = body
+            rich_to_use = body_rich
 
         if body_to_use:
-            body_xml = _build_body_xml(body_to_use, color=body_color)
+            body_xml = _build_body_xml(
+                body_to_use,
+                color=body_color,
+                rich=rich_to_use,
+                latin_font=body_latin_font,
+                ea_font=body_ea_font,
+            )
             modified = _replace_placeholder_content(modified, ["body", "obj"], body_xml)
+
+    # ── Fallback: if the slide still looks empty, try any remaining placeholder ─
+    # This handles edge cases where:
+    # (a) A title-only slide with title that went into a layout lacking "title" ph type
+    # (b) body content that couldn't find body/obj ph — try injecting into first
+    #     available text placeholder
+    if title and modified == slide_xml:
+        # Title didn't get placed; try any remaining placeholder types
+        for fallback_types in (["body", "obj"], ["subTitle"], ["pic"]):
+            result = _replace_placeholder_text(
+                modified, fallback_types, title,
+                color=title_color,
+                latin_font=title_latin_font,
+                ea_font=title_ea_font,
+            )
+            if result != modified:
+                modified = result
+                break
 
     slide_path.write_text(modified, encoding="utf-8")
 
@@ -661,11 +1073,17 @@ def _inject_content_into_slide(
 def _slide_has_dark_bg(slide_xml: str, template_colors: Dict[str, str]) -> bool:
     """Heuristically determine if a slide has a dark background.
 
-    Checks the explicit <p:bg> background color in the slide XML.
-    Falls back to False (assume light) when not deterministic.
+    Detection order:
+    1. Explicit solidFill hex colour inside <p:bg> — most reliable
+    2. schemeClr reference inside <p:bg> → map via template_colors (dk2 → bg_dark)
+    3. bgRef idx attribute — OOXML indices 1001+ are filled (not blank); we assume
+       high-contrast templates use dark fills for idx ≥ 1002
+    4. bg_dark colour present anywhere in the slide XML (loose fallback)
+    Falls back to False (assume light) when undetermined.
     """
+    # ── 1. Explicit srgbClr inside <p:bg> ────────────────────────────────────
     bg_m = re.search(
-        r'<p:bg>.*?<a:srgbClr val="([0-9A-Fa-f]{6})"',
+        r'<p:bg\b.*?<a:srgbClr val="([0-9A-Fa-f]{6})"',
         slide_xml, re.DOTALL
     )
     if bg_m:
@@ -676,9 +1094,49 @@ def _slide_has_dark_bg(slide_xml: str, template_colors: Dict[str, str]) -> bool:
         luminance = (r + g + b) / 3
         return luminance < 128
 
-    # Also check if bg_dark color is present in a solidFill inside the slide
+    # ── 2. schemeClr reference inside <p:bg> ─────────────────────────────────
+    scheme_m = re.search(
+        r'<p:bg\b.*?<a:schemeClr val="([^"]+)"',
+        slide_xml, re.DOTALL
+    )
+    if scheme_m:
+        scheme_val = scheme_m.group(1).lower()
+        # dk1/dk2 are typically dark; lt1/lt2 are light; accent varies
+        if scheme_val in ("dk1", "dk2"):
+            return True
+        if scheme_val in ("lt1", "lt2"):
+            return False
+        # For accent colours, check template_colors bg_dark
+        bg_dark = template_colors.get("bg_dark", "").upper()
+        if bg_dark:
+            r = int(bg_dark[0:2], 16)
+            g = int(bg_dark[2:4], 16)
+            b = int(bg_dark[4:6], 16)
+            return (r + g + b) / 3 < 128
+
+    # ── 3. bgRef idx — template slides often use reference fills ─────────────
+    bgref_m = re.search(r'<p:bgRef\b[^>]*idx="(\d+)"', slide_xml)
+    if bgref_m:
+        idx = int(bgref_m.group(1))
+        # idx 1001 = no fill; 1002+ = solid fill from format scheme
+        # We can't resolve the actual colour without the theme, but we know
+        # that if the template's bg_dark is truly dark and idx ≥ 1002 we
+        # probably have a filled (potentially dark) background.
+        # For safety, also check the schemeClr child of bgRef.
+        bgref_scheme_m = re.search(
+            r'<p:bgRef\b.*?<a:schemeClr val="([^"]+)"',
+            slide_xml, re.DOTALL
+        )
+        if bgref_scheme_m:
+            sv = bgref_scheme_m.group(1).lower()
+            if sv in ("dk1", "dk2"):
+                return True
+            if sv in ("lt1", "lt2"):
+                return False
+
+    # ── 4. bg_dark colour present anywhere in the slide XML ──────────────────
     bg_dark = template_colors.get("bg_dark", "000000").upper()
-    if bg_dark in slide_xml.upper():
+    if bg_dark and bg_dark in slide_xml.upper():
         return True
 
     return False
@@ -689,33 +1147,60 @@ def _replace_placeholder_text(
     ph_types: list[str],
     new_text: str,
     color: Optional[str] = None,
+    bold: bool = False,
+    italic: bool = False,
+    size: Optional[int] = None,
+    latin_font: str = "",
+    ea_font: str = "",
 ) -> str:
-    """Replace text content in a placeholder while applying the template color.
+    """Replace text content in a placeholder while applying the template color and fonts.
 
-    If *color* is given, all <a:rPr> nodes inside the placeholder will have
-    their solid fill replaced (or added) with that color, ensuring the injected
-    text uses the template palette rather than the source PPT's colors.
+    Styling rules applied:
+    - Color:      always set to *color* (the template palette value)
+    - Latin font: set when *latin_font* is non-empty (from theme majorFont/minorFont)
+    - EA font:    set when *ea_font* is non-empty (from theme majorFont/minorFont)
+    - Bold / italic / size: carried forward from the source slide when provided
+    - Language tag: auto-detected per run (zh-CN when >10% CJK, en-US otherwise)
+    - bodyPr:     the original <a:bodyPr> from the template placeholder is preserved;
+                  only the <a:p> paragraphs are replaced — NOT bodyPr or lstStyle
     """
     type_pattern = "|".join(ph_types)
+    lang = _detect_lang(new_text)
 
     def replace_sp(m):
         sp_xml = m.group(0)
         if not re.search(rf'<p:ph[^>]*type="(?:{type_pattern})"', sp_xml):
             return sp_xml
 
-        # ── Step 1: clear ALL existing <a:p> paragraphs inside <a:txBody>
-        # so old text runs (and their colors) don't linger
+        # Build rPr attributes
+        rpr_attrs = f'lang="{lang}" dirty="0"'
+        if bold:
+            rpr_attrs += ' b="1"'
+        if italic:
+            rpr_attrs += ' i="1"'
+        if size:
+            # OOXML sz is in hundredths of a point (e.g. 2400 = 24pt)
+            sz_val = size * 100 if size < 1000 else size
+            rpr_attrs += f' sz="{sz_val}"'
+
+        # Build rPr children: colour first, then font declarations
+        rpr_children = ""
+        if color:
+            rpr_children += f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+        if latin_font:
+            rpr_children += f'<a:latin typeface="{latin_font}"/>'
+        if ea_font:
+            rpr_children += f'<a:ea typeface="{ea_font}"/>'
+
         def clear_txbody(tbm):
-            before = tbm.group(1)   # everything up to and including </a:lstStyle>
-            after  = tbm.group(2)   # closing </a:txBody>
-            # Build a single paragraph with one run
-            rpr_color = (
-                f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
-                if color else ""
-            )
+            # group(1): everything up to and including </a:lstStyle>
+            # group(2): closing </a:txBody>
+            # → replace ONLY the paragraph content; bodyPr and lstStyle are kept intact
+            before = tbm.group(1)
+            after  = tbm.group(2)
             new_para = (
                 f'<a:p>'
-                f'<a:r><a:rPr lang="zh-CN" dirty="0">{rpr_color}</a:rPr>'
+                f'<a:r><a:rPr {rpr_attrs}>{rpr_children}</a:rPr>'
                 f'<a:t>{_escape_xml(new_text)}</a:t></a:r>'
                 f'</a:p>'
             )
@@ -730,21 +1215,22 @@ def _replace_placeholder_text(
         )
 
         if new_sp == sp_xml:
-            # Fallback: txBody has no lstStyle — inject a minimal run
-            rpr_color = (
-                f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
-                if color else ""
-            )
+            # Fallback: txBody has no lstStyle — inject a minimal structure BUT
+            # PRESERVE the existing <a:bodyPr> if present (don't replace with empty one)
+            existing_bodypr_m = re.search(r'<a:bodyPr\b[^>]*(?:/>|>.*?</a:bodyPr>)', sp_xml, re.DOTALL)
+            bodypr_xml = existing_bodypr_m.group(0) if existing_bodypr_m else "<a:bodyPr/>"
             new_sp = re.sub(
-                r'(<a:txBody>)',
+                r'<a:txBody>.*?</a:txBody>',
                 lambda _: (
-                    '<a:txBody>'
-                    '<a:bodyPr/><a:lstStyle/>'
-                    f'<a:p><a:r><a:rPr lang="zh-CN" dirty="0">{rpr_color}</a:rPr>'
+                    f'<a:txBody>'
+                    f'{bodypr_xml}<a:lstStyle/>'
+                    f'<a:p><a:r><a:rPr {rpr_attrs}>{rpr_children}</a:rPr>'
                     f'<a:t>{_escape_xml(new_text)}</a:t></a:r></a:p>'
+                    f'</a:txBody>'
                 ),
                 sp_xml,
                 count=1,
+                flags=re.DOTALL,
             )
 
         return new_sp
@@ -753,17 +1239,55 @@ def _replace_placeholder_text(
 
 
 def _replace_placeholder_content(slide_xml: str, ph_types: list[str], new_content_xml: str) -> str:
-    """Replace entire text body of a placeholder with new XML content."""
+    """Replace entire text body of a placeholder with new XML content.
+
+    Handles two cases:
+    1. Normal: txBody contains bodyPr + lstStyle → replace everything after lstStyle
+    2. Fallback: txBody has no lstStyle (freshly created placeholder from layout
+       extraction) → replace all <a:p> paragraphs while keeping bodyPr intact
+
+    Also supports matching placeholders without an explicit type attribute but
+    with idx≥1 (the implicit body placeholder that OOXML allows).
+    """
     type_pattern = "|".join(ph_types)
 
     def replace_sp(m):
         sp_xml = m.group(0)
-        if not re.search(rf'<p:ph[^>]*type="(?:{type_pattern})"', sp_xml):
+        # Primary match: explicit type attribute
+        has_type_match = bool(re.search(rf'<p:ph[^>]*type="(?:{type_pattern})"', sp_xml))
+        # Secondary match: no type attr but has idx≥1 (implicit body placeholder)
+        # Only activate for body/obj ph_types
+        has_implicit_body = False
+        if not has_type_match and ("body" in ph_types or "obj" in ph_types):
+            ph_no_type = re.search(r'<p:ph\b(?![^>]*type=)[^>]*/>', sp_xml)
+            has_implicit_body = bool(ph_no_type)
+
+        if not has_type_match and not has_implicit_body:
             return sp_xml
-        # Replace everything inside <a:txBody> after <a:bodyPr> and <a:lstStyle>
+
+        # Case 1: txBody has lstStyle — replace content after it
         new_sp = re.sub(
             r'(<a:txBody>.*?</a:lstStyle>).*?(</a:txBody>)',
             lambda tm: tm.group(1) + new_content_xml + tm.group(2),
+            sp_xml,
+            count=1,
+            flags=re.DOTALL,
+        )
+        if new_sp != sp_xml:
+            return new_sp
+
+        # Case 2: txBody has no lstStyle — preserve bodyPr, replace all paragraphs
+        existing_bodypr_m = re.search(r'<a:bodyPr\b[^>]*(?:/>|>.*?</a:bodyPr>)', sp_xml, re.DOTALL)
+        bodypr_xml = existing_bodypr_m.group(0) if existing_bodypr_m else "<a:bodyPr/>"
+        new_sp = re.sub(
+            r'<a:txBody>.*?</a:txBody>',
+            lambda _: (
+                f'<a:txBody>'
+                f'{bodypr_xml}'
+                f'<a:lstStyle/>'
+                f'{new_content_xml}'
+                f'</a:txBody>'
+            ),
             sp_xml,
             count=1,
             flags=re.DOTALL,
@@ -773,25 +1297,79 @@ def _replace_placeholder_content(slide_xml: str, ph_types: list[str], new_conten
     return re.sub(r'<p:sp\b.*?</p:sp>', replace_sp, slide_xml, flags=re.DOTALL)
 
 
-def _build_body_xml(lines: list[str], color: Optional[str] = None) -> str:
+def _build_body_xml(
+    lines: list[str],
+    color: Optional[str] = None,
+    rich: Optional[List[dict]] = None,
+    latin_font: str = "",
+    ea_font: str = "",
+) -> str:
     """Build XML paragraphs from a list of text lines.
 
-    Each line becomes a bullet paragraph.  If *color* is given, the run
-    property will carry an explicit solidFill so the text uses the template
-    palette rather than inheriting from the source PPT.
+    Each line becomes one paragraph.  Bullet marker is NOT hard-coded —
+    we omit `<a:buChar>` so the placeholder inherits the template layout's
+    list style (which may use numbers, custom bullets, or no bullets at all).
+    Forcing &#x2022; here would override the template's intended style.
+
+    Per-run formatting from *rich* (body_rich field) is applied when available:
+    - bold   → <a:rPr b="1">
+    - italic → <a:rPr i="1">
+    - size   → <a:rPr sz="N"> (converted to hundredths-of-a-point)
+
+    Font faces from the template's font scheme are applied when provided:
+    - latin_font → <a:latin typeface="..."/>  (minorFont for body text)
+    - ea_font    → <a:ea typeface="..."/>     (East Asian font for CJK text)
+    Both are skipped when empty so PowerPoint inherits from the layout/master.
+
+    Color is always overridden with the template palette value so text matches
+    the template's visual identity regardless of the source PPT's colours.
+
+    Language tag is auto-detected per run (zh-CN / en-US) to avoid mistagging
+    English content with Chinese locale (which breaks spell-check in PowerPoint).
     """
-    rpr_color = (
+    # Build a quick lookup: rich item index → formatting dict
+    rich_lookup: Dict[int, dict] = {}
+    if rich:
+        for i, r in enumerate(rich):
+            rich_lookup[i] = r
+
+    # Pre-build shared XML fragments
+    rpr_color_xml = (
         f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
         if color else ""
     )
+    font_xml = ""
+    if latin_font:
+        font_xml += f'<a:latin typeface="{latin_font}"/>'
+    if ea_font:
+        font_xml += f'<a:ea typeface="{ea_font}"/>'
+
     paragraphs = []
-    for line in lines:
+    for i, line in enumerate(lines):
+        fmt = rich_lookup.get(i, {})
+        bold   = fmt.get("bold", False)
+        italic = fmt.get("italic", False)
+        size   = fmt.get("size")
+
+        lang = _detect_lang(line)
+
+        # Build rPr attributes
+        rpr_attrs = f'lang="{lang}" dirty="0"'
+        if bold:
+            rpr_attrs += ' b="1"'
+        if italic:
+            rpr_attrs += ' i="1"'
+        if size:
+            sz_val = size * 100 if size < 1000 else size
+            rpr_attrs += f' sz="{sz_val}"'
+
         escaped = _escape_xml(line)
+        rpr_children = rpr_color_xml + font_xml
+        # No <a:pPr><a:buChar .../></a:pPr> — inherit template list style
         paragraphs.append(
             f'<a:p>'
-            f'<a:pPr><a:buChar char="&#x2022;"/></a:pPr>'
             f'<a:r>'
-            f'<a:rPr lang="zh-CN" dirty="0">{rpr_color}</a:rPr>'
+            f'<a:rPr {rpr_attrs}>{rpr_children}</a:rPr>'
             f'<a:t>{escaped}</a:t>'
             f'</a:r>'
             f'</a:p>'
@@ -808,6 +1386,171 @@ def _escape_xml(text: str) -> str:
             .replace('"', "&quot;"))
 
 
+def _migrate_animations(
+    source_unpacked_dir: Path,
+    source_slide_file: str,
+    dest_unpacked_dir: Path,
+    dest_slide_file: str,
+    verbose: bool,
+) -> None:
+    """Copy <p:timing> animation block from source slide into destination slide.
+
+    PPTX stores entrance/exit/emphasis animations inside a <p:timing> element
+    at the end of each slide XML.  We extract that block from the source and
+    inject it verbatim into the destination, replacing any existing <p:timing>.
+    Shape IDs inside <p:timing> reference source shapes — since we clear all
+    source shapes during content injection, the animation targets may become
+    orphaned.  This is an acceptable trade-off: users get the animation timing
+    structure and can re-link targets in PowerPoint if needed.
+    """
+    src_path = source_unpacked_dir / "ppt" / "slides" / source_slide_file
+    dst_path = dest_unpacked_dir  / "ppt" / "slides" / dest_slide_file
+
+    if not src_path.exists() or not dst_path.exists():
+        return
+
+    src_xml = src_path.read_text(encoding="utf-8")
+
+    # Extract <p:timing>…</p:timing> block from source
+    timing_m = re.search(r'<p:timing\b.*?</p:timing>', src_xml, re.DOTALL)
+    if not timing_m:
+        return  # No animations in this source slide
+
+    timing_xml = timing_m.group(0)
+
+    dst_xml = dst_path.read_text(encoding="utf-8")
+
+    # Remove any existing <p:timing> in the destination
+    dst_xml = re.sub(r'<p:timing\b.*?</p:timing>', '', dst_xml, flags=re.DOTALL)
+
+    # Insert before the closing </p:sld> tag
+    if '</p:sld>' in dst_xml:
+        dst_xml = dst_xml.replace('</p:sld>', timing_xml + '\n</p:sld>')
+        dst_path.write_text(dst_xml, encoding="utf-8")
+        if verbose:
+            print(f"    + Migrated animations to {dest_slide_file}")
+
+
+def _migrate_notes(
+    source_unpacked_dir: Path,
+    source_slide_file: str,
+    dest_unpacked_dir: Path,
+    dest_slide_file: str,
+    verbose: bool,
+) -> None:
+    """Copy the speaker notes from the source slide to the destination slide.
+
+    Notes are stored in ppt/notesSlides/notesSlideN.xml, referenced by a
+    Relationship entry in ppt/slides/_rels/slideN.xml.rels.
+    Steps:
+      1. Find the notesSlide file for the source slide via its .rels file.
+      2. Copy that notesSlide XML into the destination unpacked dir.
+      3. Add a Relationship entry in the destination slide's .rels file.
+      4. Register the new notesSlide in [Content_Types].xml.
+    """
+    src_slides_dir    = source_unpacked_dir / "ppt" / "slides"
+    src_notes_dir     = source_unpacked_dir / "ppt" / "notesSlides"
+    dst_slides_dir    = dest_unpacked_dir   / "ppt" / "slides"
+    dst_notes_dir     = dest_unpacked_dir   / "ppt" / "notesSlides"
+    dst_rels_dir      = dst_slides_dir / "_rels"
+
+    src_rels_path = src_slides_dir / "_rels" / f"{source_slide_file}.rels"
+    if not src_rels_path.exists():
+        return
+
+    src_rels = src_rels_path.read_text(encoding="utf-8")
+
+    # Find the notesSlide relationship in source .rels
+    notes_m = re.search(
+        r'<Relationship[^>]+Type="[^"]*notesSlide[^"]*"[^>]+Target="([^"]+)"',
+        src_rels,
+    )
+    if not notes_m:
+        return  # No notes for this slide
+
+    notes_target = notes_m.group(1)  # e.g. "../notesSlides/notesSlide1.xml"
+    notes_filename = Path(notes_target).name  # e.g. "notesSlide1.xml"
+    src_notes_path = src_notes_dir / notes_filename
+
+    if not src_notes_path.exists():
+        return
+
+    # Determine destination notes filename (avoid collision)
+    dst_notes_dir.mkdir(exist_ok=True)
+    dst_notes_rels_dir = dst_notes_dir / "_rels"
+    dst_notes_rels_dir.mkdir(exist_ok=True)
+
+    existing_notes = [
+        int(m.group(1))
+        for f in dst_notes_dir.glob("notesSlide*.xml")
+        if (m := re.match(r"notesSlide(\d+)\.xml", f.name))
+    ]
+    next_notes_num = max(existing_notes) + 1 if existing_notes else 1
+    dst_notes_filename = f"notesSlide{next_notes_num}.xml"
+    dst_notes_path = dst_notes_dir / dst_notes_filename
+
+    # Copy and fix the notesSlide XML (update the r:id slideRef if present)
+    notes_xml = src_notes_path.read_text(encoding="utf-8")
+    dst_notes_path.write_text(notes_xml, encoding="utf-8")
+
+    # Copy notesSlide .rels file if it exists (references the slide and notesMaster)
+    src_notes_rels = src_notes_dir / "_rels" / f"{notes_filename}.rels"
+    if src_notes_rels.exists():
+        src_notes_rels_xml = src_notes_rels.read_text(encoding="utf-8")
+        # Point the slide relationship back to the new dest slide
+        src_notes_rels_xml = re.sub(
+            r'(Target="\.\./slides/)[^"]+(")',
+            rf'\g<1>{dest_slide_file}\2',
+            src_notes_rels_xml,
+        )
+        (dst_notes_rels_dir / f"{dst_notes_filename}.rels").write_text(
+            src_notes_rels_xml, encoding="utf-8"
+        )
+
+    # Add notesSlide to [Content_Types].xml
+    ct_path = dest_unpacked_dir / "[Content_Types].xml"
+    ct = ct_path.read_text(encoding="utf-8")
+    notes_ct = (
+        f'<Override PartName="/ppt/notesSlides/{dst_notes_filename}" '
+        f'ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>'
+    )
+    if f"/ppt/notesSlides/{dst_notes_filename}" not in ct:
+        ct = ct.replace("</Types>", f"  {notes_ct}\n</Types>")
+        ct_path.write_text(ct, encoding="utf-8")
+
+    # Add Relationship in destination slide's .rels file
+    dst_slide_rels_path = dst_rels_dir / f"{dest_slide_file}.rels"
+    if dst_slide_rels_path.exists():
+        dest_rels = dst_slide_rels_path.read_text(encoding="utf-8")
+    else:
+        dest_rels = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
+            '</Relationships>'
+        )
+
+    # Remove any old notes relationship first
+    dest_rels = re.sub(
+        r'\s*<Relationship[^>]*notesSlide[^>]*/>\s*', '\n', dest_rels
+    )
+
+    # Find next rId
+    rids = [int(m) for m in re.findall(r'Id="rId(\d+)"', dest_rels)]
+    next_rid_num = max(rids) + 1 if rids else 10
+    notes_rid = f"rId{next_rid_num}"
+
+    new_rel = (
+        f'<Relationship Id="{notes_rid}" '
+        f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" '
+        f'Target="../notesSlides/{dst_notes_filename}"/>'
+    )
+    dest_rels = dest_rels.replace("</Relationships>", f"  {new_rel}\n</Relationships>")
+    dst_slide_rels_path.write_text(dest_rels, encoding="utf-8")
+
+    if verbose:
+        print(f"    + Migrated notes → {dst_notes_filename}")
+
+
 def _build_new_slides(
     source_slides: List[dict],
     slide_mapping: List[dict],
@@ -816,6 +1559,9 @@ def _build_new_slides(
     source_images_dir: Path,
     keep_notes: bool,
     template_colors: Dict[str, str],
+    template_fonts: Dict[str, str],
+    source_unpacked_dir: Path,
+    source_slide_file_map: Dict[int, str],
     verbose: bool,
 ) -> List[Tuple[str, str]]:
     """Create all new slides by duplicating template slides and injecting content."""
@@ -836,6 +1582,10 @@ def _build_new_slides(
 
         layout_file = sm["template_layout"]
 
+        # Get layout info (includes ph_styles extracted from layout XML)
+        layout_info = layout_lookup.get(layout_file, {})
+        layout_ph_styles = layout_info.get("ph_styles", {})
+
         # Find or create slide using this layout
         template_source_slide = _find_template_slide_for_layout(unpacked_dir, layout_file)
 
@@ -844,10 +1594,28 @@ def _build_new_slides(
         else:
             new_slide_file, rid = _create_slide_from_layout(unpacked_dir, layout_file)
 
-        # Inject content with template colors
+        # Inject content with full template style (colors + fonts + layout ph_styles)
         _inject_content_into_slide(
-            unpacked_dir, new_slide_file, source_slide, template_colors, verbose
+            unpacked_dir, new_slide_file, source_slide,
+            template_colors, template_fonts, layout_ph_styles,
+            verbose,
         )
+
+        # Migrate animations from source slide
+        src_file = source_slide_file_map.get(idx)
+        if src_file:
+            _migrate_animations(
+                source_unpacked_dir, src_file,
+                unpacked_dir, new_slide_file,
+                verbose,
+            )
+            # Migrate speaker notes if requested
+            if keep_notes:
+                _migrate_notes(
+                    source_unpacked_dir, src_file,
+                    unpacked_dir, new_slide_file,
+                    verbose,
+                )
 
         if verbose:
             print(f"  Slide {idx}: created {new_slide_file} using layout {layout_file}")

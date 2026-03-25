@@ -15,8 +15,9 @@ generate_notes.py — 自动为 PPTX 每页幻灯片生成演讲者备注
                  默认: speaker
   --language     备注语言：zh（中文）| en（英文）| auto（随内容自动检测）
                  默认: auto
-  --no-overwrite 跳过已有备注的幻灯片（默认覆盖）
-  --dry-run      只打印生成的备注，不写入文件
+  --no-overwrite   跳过已有备注的幻灯片（默认覆盖）
+  --append-summary 保留原有备注，在其后追加 AI 总结分区（推荐用于模板套用后增强备注）
+  --dry-run        只打印生成的备注，不写入文件
   --backend      生成后端：openai | ollama | simple
                  默认: simple（无需 API，基于规则生成）
   --model        模型名称，仅 openai/ollama 后端有效
@@ -38,6 +39,12 @@ generate_notes.py — 自动为 PPTX 每页幻灯片生成演讲者备注
 
   # 跳过已有备注的页
   python scripts/generate_notes.py deck.pptx out.pptx --no-overwrite
+
+  # 保留原有备注，追加 AI 总结（模板套用后增强备注的推荐用法）
+  python scripts/generate_notes.py output.pptx output_with_notes.pptx --append-summary
+
+  # 保留原有备注 + 追加 AI 总结，使用 OpenAI 后端
+  python scripts/generate_notes.py output.pptx output_with_notes.pptx --append-summary --backend openai --api-key sk-xxx
 """
 
 import argparse
@@ -400,29 +407,59 @@ Keep it under 100 words. No markdown. Plain text only."""
 # 写入备注到幻灯片
 # ──────────────────────────────────────────────
 
-def write_notes_to_slide(slide, notes_text: str):
-    """将备注文字写入幻灯片的 notes placeholder。"""
+def write_notes_to_slide(slide, notes_text: str, append_summary: bool = False, lang: str = "zh"):
+    """将备注文字写入幻灯片的 notes placeholder。
+
+    Args:
+        slide: python-pptx Slide 对象
+        notes_text: 要写入的备注文本（新生成的 AI 内容）
+        append_summary: 若为 True，保留原有备注，在其后追加分隔线 + AI 总结；
+                        若为 False，覆盖原有备注（原行为）。
+        lang: 分隔线语言，"zh" 中文 / "en" 英文
+    """
     from pptx.oxml.ns import qn
     from lxml import etree
 
     if not slide.has_notes_slide:
-        # 访问一次会自动创建 notes slide
         _ = slide.notes_slide
 
     tf = slide.notes_slide.notes_text_frame
     txBody = tf._txBody
 
-    # 彻底删除所有旧 <a:p> 节点，避免多次执行后残留空段落
-    for old_p in txBody.findall(qn("a:p")):
-        txBody.remove(old_p)
+    if append_summary:
+        # ── 追加模式：保留原有备注，添加分隔线 + AI 总结 ──
+        # 分隔符文本
+        separator = "────────────────────────" if lang == "en" else "────────────────────────"
+        if lang == "zh":
+            section_header = "【AI 摘要】"
+        else:
+            section_header = "[AI Summary]"
 
-    # 逐行重新写入
-    lines = notes_text.split("\n")
-    for line in lines:
-        new_p = etree.SubElement(txBody, qn("a:p"))
-        new_r = etree.SubElement(new_p, qn("a:r"))
-        new_t = etree.SubElement(new_r, qn("a:t"))
-        new_t.text = line
+        # 追加分隔线段落
+        for line_text in ["", separator, section_header, ""]:
+            new_p = etree.SubElement(txBody, qn("a:p"))
+            if line_text:
+                new_r = etree.SubElement(new_p, qn("a:r"))
+                new_t = etree.SubElement(new_r, qn("a:t"))
+                new_t.text = line_text
+
+        # 追加 AI 总结内容（逐行）
+        for line in notes_text.split("\n"):
+            new_p = etree.SubElement(txBody, qn("a:p"))
+            if line.strip():
+                new_r = etree.SubElement(new_p, qn("a:r"))
+                new_t = etree.SubElement(new_r, qn("a:t"))
+                new_t.text = line
+    else:
+        # ── 覆盖模式（原行为）：彻底删除所有旧 <a:p> 节点后重写 ──
+        for old_p in txBody.findall(qn("a:p")):
+            txBody.remove(old_p)
+
+        for line in notes_text.split("\n"):
+            new_p = etree.SubElement(txBody, qn("a:p"))
+            new_r = etree.SubElement(new_p, qn("a:r"))
+            new_t = etree.SubElement(new_r, qn("a:t"))
+            new_t.text = line
 
 
 # ──────────────────────────────────────────────
@@ -453,6 +490,11 @@ def main():
         "--no-overwrite",
         action="store_true",
         help="跳过已有备注的幻灯片",
+    )
+    parser.add_argument(
+        "--append-summary",
+        action="store_true",
+        help="保留原有备注，在其后追加分隔线 + AI 总结（模板套用后增强备注的推荐用法）",
     )
     parser.add_argument(
         "--dry-run",
@@ -490,7 +532,8 @@ def main():
     print(f"📂 加载: {input_path}")
     prs = Presentation(str(input_path))
     total = len(prs.slides)
-    print(f"📊 共 {total} 张幻灯片 | 模式: {args.mode} | 语言: {args.language} | 后端: {args.backend}")
+    mode_desc = "追加AI摘要" if args.append_summary else args.mode
+    print(f"📊 共 {total} 张幻灯片 | 模式: {mode_desc} | 语言: {args.language} | 后端: {args.backend}")
     print()
 
     generated_count = 0
@@ -501,38 +544,62 @@ def main():
         content = extract_slide_content(slide)
         existing = get_existing_notes(slide)
 
-        # 跳过已有备注的页
-        if args.no_overwrite and existing:
+        # 跳过已有备注的页（append-summary 模式下不跳过，因为追加不会破坏原有备注）
+        if args.no_overwrite and existing and not args.append_summary:
             print(f"  [slide {slide_num:2d}] ⏭  跳过（已有备注）")
+            skipped_count += 1
+            continue
+
+        # append-summary 模式下，若该页已追加过 AI 摘要，跳过（避免重复追加）
+        if args.append_summary and existing and ("【AI 摘要】" in existing or "[AI Summary]" in existing):
+            print(f"  [slide {slide_num:2d}] ⏭  跳过（已含 AI 摘要）")
             skipped_count += 1
             continue
 
         # 生成备注
         print(f"  [slide {slide_num:2d}] ✍  生成中... 标题: {content['title'][:30] or '(无标题)'}")
 
+        # append-summary 模式下固定使用 summary 风格，内容更精简
+        note_mode = "summary" if args.append_summary else args.mode
+
         try:
             if args.backend == "openai":
                 notes = generate_notes_openai(
-                    content, i, args.mode, args.language, api_key, model, args.base_url
+                    content, i, note_mode, args.language, api_key, model, args.base_url
                 )
             elif args.backend == "ollama":
                 notes = generate_notes_ollama(
-                    content, i, args.mode, args.language, model,
+                    content, i, note_mode, args.language, model,
                     args.base_url or "http://localhost:11434"
                 )
             else:
-                notes = generate_notes_simple(content, i, args.mode, args.language)
+                notes = generate_notes_simple(content, i, note_mode, args.language)
         except Exception as e:
             print(f"    ⚠️  生成失败: {e}，使用 simple 后端兜底")
-            notes = generate_notes_simple(content, i, args.mode, args.language)
+            notes = generate_notes_simple(content, i, note_mode, args.language)
+
+        # 检测语言（用于分隔符语言选择）
+        combined_text = content["title"] + " ".join(content["body"])
+        detected_lang = detect_language(combined_text) if combined_text.strip() else "zh"
+        if args.language != "auto":
+            detected_lang = args.language
 
         if args.dry_run:
-            print(f"    ── 备注预览 ──")
+            if args.append_summary and existing:
+                print(f"    ── 原有备注 ──")
+                for line in existing.splitlines()[:3]:
+                    print(f"    {line}")
+                print(f"    ...")
+            print(f"    ── AI 摘要追加 ──" if args.append_summary else f"    ── 备注预览 ──")
             for line in notes.splitlines():
                 print(f"    {line}")
             print()
         else:
-            write_notes_to_slide(slide, notes)
+            write_notes_to_slide(
+                slide, notes,
+                append_summary=args.append_summary,
+                lang=detected_lang,
+            )
 
         generated_count += 1
 

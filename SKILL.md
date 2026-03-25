@@ -14,11 +14,10 @@ Handle all .pptx tasks — create from scratch, edit existing files, apply templ
 
 ```
 User provides TWO .pptx files?
-  → Mode 1: Template Apply (apply second file's style to first file's content)
-  ⚠️  Warn first if source file likely has animations:
-      "apply_template 会重建幻灯片结构，所有动画和切换效果将丢失。
-       如果源文件有动画，请确认是否继续。"
-      Then proceed only after user confirms.
+  → Mode 1: Template Apply (三阶段：AI审校内容 → 套入模板 → AI逐页美化)
+  ℹ️  Animation note: apply_template 会自动迁移源 PPT 的动画时间轴结构，
+      但因形状 ID 重新分配，目标形状可能需在 PowerPoint 中手动重新绑定。
+      备注（Speaker Notes）完整保留。
 
 User provides ONE .pptx file + says "beautify / redesign / make it look better"?
   → Mode 2: Style Beautify
@@ -65,7 +64,9 @@ Still unclear?
 | Read/analyze content | `python -m markitdown presentation.pptx` |
 | Edit existing PPT | Editing Workflow section below |
 | Create from scratch | Creating from Scratch section below |
-| Apply template to PPT | Mode 1 below |
+| Apply template (with AI review + beautify) | Mode 1 below — 三阶段完整流程 |
+| AI content review only | Mode 1 阶段 A |
+| AI per-slide beautify only | Mode 1 阶段 C |
 | Beautify PPT style | Mode 2 below |
 | Generate speaker notes | Speaker Notes Workflow below |
 | Merge multiple PPTXs | Mode 6: Merge PPT below |
@@ -188,11 +189,11 @@ slide.addShape(pres.shapes.RECTANGLE, { fill: { color: "FFFFFF" }, shadow: makeS
 
 ## Transform Presentations
 
-Two powerful transformation modes:
+Two powerful transformation modes — both now include **AI-powered stages**:
 
 | Mode | Description |
 |------|-------------|
-| **Template Apply** | Extract content from a source PPT and reflow it into a target template's layouts and visual identity |
+| **Template Apply** | 三阶段：① AI审校内容（纠错/精简/补全） → ② 脚本套入模板（配色/字体/布局） → ③ AI逐页美化（排版/字数控制/空行清理） |
 | **Style Beautify** | Analyze PPT content and redesign the visual style — colors, fonts, layouts — without changing the content |
 
 Transform scripts quick reference:
@@ -213,99 +214,278 @@ Transform scripts quick reference:
 
 ## Mode 1: Template Apply
 
-Apply an existing template's visual identity to your content.
+Apply an existing template's visual identity to your content — with **two AI-powered stages** to ensure content accuracy and per-slide visual quality before and after the template is applied.
 
 ### When to use
 
 - User provides a source PPT (their content) and a template PPT (the desired look)
 - User says: "apply this template", "make my PPT look like this", "use this style"
 
-### Workflow
+### Overview — 三阶段流程
 
-**Step 0 — Animation warning (always do this first)**
-
-Run a quick check to see if the source file has animations:
-
-```bash
-python -c "
-from pptx import Presentation
-from pptx.oxml.ns import qn
-prs = Presentation('source.pptx')
-has_anim = any(
-    slide._element.find('.//' + qn('p:timing')) is not None
-    for slide in prs.slides
-)
-print('HAS ANIMATIONS:', has_anim)
-"
+```
+阶段 A: 内容提取 + AI 审校纠错
+  ↓ AI 检查内容完整性、纠正错误、调整结构
+阶段 B: 套入模板（脚本自动执行）
+  ↓ apply_template.py 将审校后内容注入模板
+阶段 C: AI 逐页美化调整 + 备注增强
+  ↓ AI 排版优化 + 保留原备注并追加 AI 摘要
+最终输出：内容准确 + 视觉精良 + 备注完善的 PPT
 ```
 
-If `HAS ANIMATIONS: True`, tell the user:
+> ℹ️ **动画保留说明：** `apply_template` 会迁移源 PPT 中所有幻灯片的动画时间轴结构（入场顺序、延迟、触发方式），但由于幻灯片形状 ID 在模板套用过程中会重新分配，部分动画的目标形状可能需要在 PowerPoint 里手动重新绑定。切换效果（Transitions）和备注（Speaker Notes）均完整保留。
 
-> ⚠️ **注意：源文件包含动画效果。** `apply_template` 会重建每页幻灯片的结构，所有动画和切换效果（入场、强调、退场、路径）都将在输出文件中消失。如需保留动画，请在模板套用完成后在 PowerPoint 中手动重新添加。是否继续？
+---
 
-Only proceed after the user confirms.
+### 阶段 A：内容提取 + AI 审校纠错
 
-**Step 1 — Analyze both files**
+**Step A1 — 提取源 PPT 内容**
 
 ```bash
-# Extract and display source content
-python scripts/extract_content.py source.pptx
+python scripts/extract_content.py source.pptx --output content.json
+```
 
-# View template layouts
-python scripts/thumbnail.py template.pptx
+同时获取缩略图以便理解原始视觉结构：
 
-# Extract template structure details
+```bash
+python scripts/thumbnail.py source.pptx source_thumb/
+```
+
+**Step A2 — AI 内容审校（必做步骤）**
+
+读取 `content.json` 后，作为 AI 你必须对每一页内容执行以下审校：
+
+**审校任务列表：**
+
+1. **标题完整性** — 检查每页 `title` 是否为空或过短（< 3字）；若为空则根据 body 内容推断补写
+2. **正文内容纠错** — 检查 `body` 文本中的：
+   - 明显错别字、标点错误
+   - 截断/不完整的句子（常见于 OCR 识别源或复制粘贴）
+   - 重复词语或重复要点
+3. **页面类型判断** — 结合 `title`/`body`/`subtitle` 判断每页是否被正确分类（`type` 字段）；如 section 页被误识别为 content，应修正
+4. **要点精简** — 若某页 `body` 超过 6 条要点，分析是否可以合并；超过 8 条要点时必须合并
+5. **内容一致性** — 跨页检查：前后页提到相同概念时表述是否一致（如产品名、数字、缩写）
+6. **缺失内容补全** — 若第一页无标题/副标题，根据全文主题推断补写；若结语页内容为空，补写一句话
+
+**AI 审校输出格式：**
+
+审校完成后，将修改后的内容以**对比形式**展示给用户：
+
+```
+📋 内容审校报告
+
+第 2 页（原类型: content）
+  标题: "产品介绍" → 无变化
+  正文修改:
+    原: "用户可以通过以下方式访问系功能..."
+    改: "用户可以通过以下方式访问系统功能..." [纠正错别字]
+    原: 8条要点（超出限制）
+    改: 合并为6条 [精简]
+
+第 5 页（原类型: section）
+  发现问题: type 被识别为 content，实为 section 过渡页
+  修正: type → "section"
+
+[若无修改] 第 3 页 — 无问题 ✓
+...
+
+共审校 N 页，发现 M 处问题，已修正。是否继续套入模板？
+```
+
+**展示审校报告后，等待用户确认（"继续" / 或指出不同意见）再进入阶段 B。**
+
+用户如有不同意见，按用户指示调整后再继续。
+
+---
+
+### 阶段 B：套入模板（脚本执行）
+
+**Step B1 — 分析模板**
+
+```bash
+# 查看模板布局缩略图
+python scripts/thumbnail.py template.pptx template_thumb/
+
+# 查看模板文字结构
 python -m markitdown template.pptx
 ```
 
-Read the thumbnail grid to understand template slide layouts. Read the extract_content output to understand source slide structure.
-
-**Step 2 — Plan the mapping**
-
-For each source slide:
-1. Identify the slide type (title, content, two-column, image+text, conclusion, etc.)
-2. Find the best matching layout in the template
-3. Note any content that won't fit (too many bullet points, missing images, etc.)
-
-Create a mapping table like:
-```
-Source slide 1 (title) → Template slide 1 (title layout)
-Source slide 2 (agenda) → Template slide 3 (list layout)
-Source slide 3 (two columns) → Template slide 5 (two-column layout)
-...
-```
-
-**Step 3 — Run the apply script**
+**Step B2 — 执行套模板**
 
 ```bash
 python scripts/apply_template.py source.pptx template.pptx output.pptx
 ```
 
-This script:
-1. Extracts all text, images, charts from source slides
-2. Unpacks the template
-3. Duplicates the appropriate template slides for each source slide
-4. Populates content into the template's placeholders
-5. Packs the result
+脚本自动完成：
+1. 从源 PPT 提取文字、图片、格式（bold/italic/size）
+2. 解包模板，为每页源幻灯片找到最匹配的模板布局
+3. 将内容注入模板占位符，使用模板配色/字体
+4. 迁移动画时间轴结构和 Speaker Notes
+5. 打包输出文件
 
-**Step 4 — Manual fine-tuning (if needed)**
+> **如需覆盖自动映射方案：**
+> ```bash
+> python scripts/apply_template.py source.pptx template.pptx output.pptx --dry-run
+> # 查看映射方案，保存到文件
+> python scripts/apply_template.py source.pptx template.pptx output.pptx --dry-run --save-mapping mapping.json
+> # 编辑 mapping.json 后使用自定义映射执行
+> python scripts/apply_template.py source.pptx template.pptx output.pptx --mapping mapping.json
+> ```
 
-For slides with imperfect automated mapping:
+**Step B3 — 生成输出缩略图，准备 AI 美化**
 
 ```bash
-python scripts/office/unpack.py output.pptx unpacked_output/
-# Edit specific slide XML files
-python scripts/office/pack.py unpacked_output/ output_final.pptx --original template.pptx
+python scripts/thumbnail.py output.pptx output_thumb/
 ```
 
-**Step 5 — QA**
+---
+
+### 阶段 C：AI 逐页美化调整
+
+套模板脚本完成后，AI 需要对输出 PPT **逐页进行内容感知的排版优化**。这是纯文字/XML 层面的精调，不调用外部渲染工具。
+
+**Step C1 — 解包输出文件**
 
 ```bash
-# Check content
-python -m markitdown output.pptx
+python scripts/office/unpack.py output.pptx output_unpacked/
+```
 
-# Visual check
-python scripts/thumbnail.py output.pptx output_thumb
+**Step C2 — AI 逐页分析 + 优化**
+
+针对每一页幻灯片（`output_unpacked/ppt/slides/slideN.xml`），执行以下判断和处理：
+
+#### 美化规则 — 按页面类型
+
+**封面页 / 标题页（type: title）**
+- 检查 title 字数：若超过 20 字，建议截短主标题，将剩余部分移入 subtitle（用 `patch_slide.py` 修改）
+- 检查 subtitle 是否存在：若无 subtitle 但 body 有内容，将 body 第一条提升为 subtitle
+- 标题文字应 bold，字号 ≥ 36pt；若小于此值，使用 patch_slide.py 调整
+
+**内容页（type: content）**
+- 要点数量：4-6 条最佳；若 ≤ 3 条，可保持不变或加一句引导语；若超 6 条，合并相似条目
+- 每条要点字数：建议 ≤ 25 字；若某条超过 40 字，拆分成两条
+- 检查是否有「孤行」（body 第一行是大标题式文字而非要点）—— 若有，将其提升为幻灯片 title（若当前 title 为空）或作为独立 subtitle
+- 若 `has_images: true`，保留图片；检查正文是否为图注格式（短句），若是则字号不低于 14pt
+
+**章节页（type: section）**
+- body 内容通常应为空或一句话；若 body 超过 2 条，将其移到下一页（新建 content 页）并清空当前页 body
+- title 居中对齐时检查 `<a:pPr algn="ctr">`；若不居中，不强制修改（保持模板默认）
+
+**结语页（type: end / conclusion）**
+- 若 title 为"谢谢"/"Thank You"/"END"等，body 若为空则补充一句简短结语（可使用 AI 生成）
+- 若 body 有多余联系方式信息，移动到 notes（Speaker Notes）而非幻灯片正文
+
+**所有页面通用检查**
+- 连续 3 页布局类型相同：第 3 页建议切换为不同的模板 layout（通过 `--mapping` 参数在下次运行时调整；或在 XML 中修改 layout 关联）
+- 空行清理：删除 body 中首尾多余的空行（`<a:p><a:endParaRPr/></a:p>`）
+- 若某页 body 和 title 均为空：标记为"疑似多余页"，提示用户确认是否保留
+
+**Step C3 — 应用优化**
+
+使用 `patch_slide.py` 批量修改文字：
+
+```bash
+# 修改特定页面文字
+python scripts/patch_slide.py output.pptx --find "原文字" --replace "新文字"
+```
+
+对于结构性调整（调整段落数量、移动内容）使用 XML 直接编辑：
+
+```bash
+python scripts/office/unpack.py output.pptx output_unpacked/
+# 编辑 output_unpacked/ppt/slides/slideN.xml
+python scripts/office/pack.py output_unpacked/ output_final.pptx --original template.pptx
+```
+
+**Step C-Notes — 备注增强（保留原备注 + 追加 AI 摘要）**
+
+套模板后，每页备注需要在**保留源 PPT 原有备注**的基础上，追加 AI 生成的内容摘要，方便演讲者快速查看当页核心。
+
+```bash
+# 最简用法（规则摘要，无需 API）
+python scripts/generate_notes.py output_final.pptx output_final.pptx --append-summary
+
+# 使用 OpenAI 生成更高质量摘要
+python scripts/generate_notes.py output_final.pptx output_final.pptx --append-summary --backend openai --api-key sk-xxx
+
+# 使用本地 Ollama
+python scripts/generate_notes.py output_final.pptx output_final.pptx --append-summary --backend ollama --model llama3
+```
+
+生成后每页备注结构如下：
+
+```
+[原有备注内容（从源 PPT 迁移的演讲稿、说明等，原样保留）]
+
+────────────────────────
+【AI 摘要】
+
+本页核心：产品核心功能介绍
+要点：多租户架构；弹性扩缩容；一键部署；安全审计。
+（含图表）
+```
+
+> ℹ️ **智能去重：** 若已运行过 `--append-summary`，再次执行时脚本会自动检测备注中是否已含「AI 摘要」标记，跳过已处理的页面，避免重复追加。
+
+**Step C4 — AI 美化报告**
+
+完成逐页调整后，向用户展示：
+
+```
+✨ 逐页美化报告
+
+第 1 页（封面）
+  ✓ 标题 "产品年度发布会2024" → 已截短为 "产品年度发布会" + subtitle "2024"
+  ✓ 去除首部2个空段落
+
+第 3 页（内容）
+  ✓ 将8条要点合并为5条（删除重复的第6、7条）
+  ✓ 第2条要点拆分（原超55字）
+
+第 6 页（章节）
+  ✓ 移除多余 body 内容（已移至第7页开头）
+
+第 8 页（结语）
+  ✓ 补充结语：「感谢您的关注，期待与您的合作。」
+
+共处理 N 页，N 处调整已完成。
+```
+
+**Step C5 — 最终 QA**
+
+```bash
+# 内容完整性检查
+python -m markitdown output_final.pptx
+
+# 视觉检查缩略图
+python scripts/thumbnail.py output_final.pptx final_thumb/
+
+# 质量评分
+python scripts/qa_check.py output_final.pptx
+```
+
+---
+
+### 完整命令速查
+
+```bash
+# 阶段 A: 提取内容
+python scripts/extract_content.py source.pptx --output content.json
+python scripts/thumbnail.py source.pptx source_thumb/
+# → AI 审校 content.json，向用户展示修改报告，等待确认
+
+# 阶段 B: 套入模板
+python scripts/thumbnail.py template.pptx template_thumb/
+python scripts/apply_template.py source.pptx template.pptx output.pptx
+python scripts/thumbnail.py output.pptx output_thumb/
+
+# 阶段 C: 逐页美化 + 备注增强
+python scripts/office/unpack.py output.pptx output_unpacked/
+# → AI 逐页分析 XML，执行排版优化
+python scripts/office/pack.py output_unpacked/ output_final.pptx --original template.pptx
+# → 保留原备注，追加 AI 摘要（智能去重，可安全重复执行）
+python scripts/generate_notes.py output_final.pptx output_final.pptx --append-summary
+python scripts/qa_check.py output_final.pptx
 ```
 
 ---
@@ -1078,6 +1258,8 @@ python -m markitdown output.pptx
 |----------|-------|------------|
 | `apply_template.py` with complex charts | Charts are extracted as images, not live chart objects | Manually re-insert charts after applying template |
 | `apply_template.py` when slide counts differ greatly | Auto-mapping may repeat or skip template layouts | Use `--mapping` flag to provide a manual mapping JSON |
+| `apply_template.py` rich text with mixed bold/plain | bold/italic/size are preserved per run; font face is always the template font | Use XML editing to adjust individual runs after apply |
+| `apply_template.py` hyperlinks | Links are not migrated (text is extracted without URL) | Re-add hyperlinks manually in PowerPoint after apply |
 | `beautify_ppt.py` on slides with custom positioned elements | Script may reposition elements to fit the new theme grid | Run visual QA and manually adjust offending slides via XML |
 | Very long bullet text | May overflow text boxes after theme change | Shorten content or adjust font size in XML after beautify |
 | Embedded fonts in source PPT | Fonts may not transfer to output | Install the same fonts locally, or substitute with theme fonts |

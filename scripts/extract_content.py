@@ -251,17 +251,30 @@ def _extract_placeholder_text(slide_xml: str, ph_types: List[str]) -> str:
 
 
 def _extract_body_text(slide_xml: str) -> List[str]:
-    """Extract body/content text as a list of lines."""
+    """Extract body/content text as a list of lines.
+
+    Only pulls from genuine content placeholders (body, obj) and non-typed
+    placeholders (idx-only, which are also treated as body in OOXML).
+
+    Explicitly excludes:
+    - title / ctrTitle  → handled by _extract_placeholder_text separately
+    - subTitle          → has its own 'subtitle' field in the slide data
+    - dt / ftr / sldNum → decoration (date, footer, slide number) — not content
+    """
     lines = []
-    body_types = ["body", "obj", "dt", "subTitle"]
+    # Only extract from actual body/content placeholder types
+    body_types = ["body", "obj"]
     type_pattern = "|".join(body_types)
+    # Types to explicitly skip (not content)
+    skip_types = {"title", "ctrTitle", "subTitle", "dt", "ftr", "sldNum"}
 
     for sp_match in re.finditer(r'<p:sp\b.*?</p:sp>', slide_xml, re.DOTALL):
         sp_xml = sp_match.group(0)
-        # Skip title placeholders
-        if re.search(r'<p:ph[^>]*type="(?:title|ctrTitle)"', sp_xml):
+        # Skip if this has a non-content placeholder type
+        ph_type_m = re.search(r'<p:ph[^>]*type="([^"]+)"', sp_xml)
+        if ph_type_m and ph_type_m.group(1) in skip_types:
             continue
-        # Include body/obj/non-typed placeholders
+        # Include body/obj/non-typed placeholders (idx-only = implicit body)
         if re.search(rf'<p:ph[^>]*type="(?:{type_pattern})"', sp_xml) or \
            (re.search(r'<p:ph\b', sp_xml) and not re.search(r'<p:ph[^>]*type=', sp_xml)):
             # Extract paragraph by paragraph
