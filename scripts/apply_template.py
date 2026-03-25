@@ -40,12 +40,27 @@ import shutil
 import sys
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
 import subprocess
 
-# Add scripts dir to path for imports (Python 3.9 compatible)
+# Namespace definitions for PPTX XML
+NS = {
+    "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+}
+# Register namespaces to avoid ns0, ns1 prefixes
+for prefix, uri in NS.items():
+    ET.register_namespace(prefix, uri)
+# Also register common namespaces found in PPTX
+ET.register_namespace("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006")
+ET.register_namespace("c", "http://schemas.openxmlformats.org/drawingml/2006/chart")
+ET.register_namespace("dgm", "http://schemas.openxmlformats.org/drawingml/2006/diagram")
+
+# Add scripts dir to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 from extract_content import extract_content
@@ -127,6 +142,7 @@ def apply_template(
     interactive: bool = False,
     beautify: bool = False,
     beautify_theme: Optional[str] = None,
+    dark_mode: bool = False,
 ) -> None:
     """Apply template to source PPT content."""
 
@@ -221,6 +237,12 @@ def apply_template(
             source_unpacked_dir, source_content["slides"]
         )
 
+        # Build template theme (template colors + beautify design system)
+        template_theme = _build_template_theme(template_colors, template_fonts, beautify_theme)
+        if verbose and beautify:
+            print(f"  Beautify theme: {template_theme['name']}")
+            print(f"  Colors: primary=#{template_theme['primary']}, accent=#{template_theme['accent']}")
+
         # Build new slide list
         new_slides = _build_new_slides(
             source_content["slides"],
@@ -235,6 +257,9 @@ def apply_template(
             source_slide_file_map,
             verbose,
             skip_animations,
+            beautify=beautify,
+            template_theme=template_theme,
+            dark_mode=dark_mode,
         )
 
         # Update presentation.xml with new slide order
@@ -268,20 +293,9 @@ def apply_template(
         print(f"\nPacking output to {output_pptx}...")
         _run_pack(str(unpacked_dir), str(output_path), original=str(template_path))
 
-    # Apply final beautification pass
-    if beautify:
-        print(f"\nApplying AI beautification pass...")
-        import beautify_ppt
-        temp_output = str(output_path) + ".beautify.tmp"
-        shutil.copy(str(output_path), temp_output)
-        beautify_ppt.beautify_ppt(
-            temp_output,
-            str(output_path),
-            theme_name=beautify_theme,
-            verbose=verbose,
-        )
-        Path(temp_output).unlink(missing_ok=True)
-        print(f"  Beautification complete!")
+    # Note: Deep beautification (backgrounds, layout variants, fonts, images, tables)
+    # is now applied per-slide during slide building when --beautify is enabled.
+    # The template theme colors/fonts are preserved throughout.
 
     print(f"\nDone! Output saved to: {output_pptx}")
     print("Run QA check with:")
@@ -1822,7 +1836,1053 @@ def _merge_custom_shape_content(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AI BEAUTIFICATION FUNCTIONS
+# BEAUTIFY PPT — INTEGRATED FROM beautify_ppt.py
+# ═════════════════════════════════════════════════════════════════════════════
+# These functions are embedded here to enable deep integration where
+# beautification ENHANCES the template's style (colors, fonts) rather than
+# replacing it with a completely different theme.
+#
+# Key difference from standalone beautify_ppt.py:
+# - Uses template's own colors/fonts as the theme base
+# - Applied per-slide during slide building (not post-processing)
+# - Adds 10 layout variants, gradient backgrounds, visual accents
+
+THEMES = {
+    "executive": {
+        "name": "Executive",
+        "primary": "1E2761", "secondary": "CADCFC", "accent": "C9A84C",
+        "bg_light": "FFFFFF", "bg_dark": "1E2761",
+        "text_on_dark": "FFFFFF", "text_on_light": "1E2761",
+        "text_muted": "6B7280",
+        "header_font": "Cambria", "body_font": "Calibri",
+        "title_bold": True, "title_size": 4000, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "1E2761", "gradient_end": "2A3A7C",
+    },
+    "tech": {
+        "name": "Tech",
+        "primary": "028090", "secondary": "1C2541", "accent": "02C39A",
+        "bg_light": "F0FFFE", "bg_dark": "0B0C10",
+        "text_on_dark": "FFFFFF", "text_on_light": "1C2541",
+        "text_muted": "4B5563",
+        "header_font": "Trebuchet MS", "body_font": "Calibri",
+        "title_bold": True, "title_size": 3800, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "028090", "gradient_end": "02C39A",
+    },
+    "creative": {
+        "name": "Creative",
+        "primary": "F96167", "secondary": "2F3C7E", "accent": "F9E795",
+        "bg_light": "FFFDF9", "bg_dark": "2F3C7E",
+        "text_on_dark": "FFFFFF", "text_on_light": "2F3C7E",
+        "text_muted": "6B7280",
+        "header_font": "Georgia", "body_font": "Calibri",
+        "title_bold": True, "title_size": 4000, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "F96167", "gradient_end": "F9E795",
+    },
+    "warm": {
+        "name": "Warm",
+        "primary": "B85042", "secondary": "84B59F", "accent": "ECE2D0",
+        "bg_light": "FFFDF9", "bg_dark": "B85042",
+        "text_on_dark": "FFFFFF", "text_on_light": "3D2B1F",
+        "text_muted": "78716C",
+        "header_font": "Palatino Linotype", "body_font": "Calibri",
+        "title_bold": True, "title_size": 3800, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "B85042", "gradient_end": "D4685A",
+    },
+    "minimal": {
+        "name": "Minimal",
+        "primary": "36454F", "secondary": "F2F2F2", "accent": "212121",
+        "bg_light": "FFFFFF", "bg_dark": "36454F",
+        "text_on_dark": "FFFFFF", "text_on_light": "36454F",
+        "text_muted": "9CA3AF",
+        "header_font": "Calibri", "body_font": "Calibri",
+        "title_bold": True, "title_size": 4000, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "36454F", "gradient_end": "4A5A65",
+    },
+    "bold": {
+        "name": "Bold",
+        "primary": "990011", "secondary": "2F3C7E", "accent": "FCF6F5",
+        "bg_light": "FFFFFF", "bg_dark": "1A1A2E",
+        "text_on_dark": "FFFFFF", "text_on_light": "1A1A2E",
+        "text_muted": "6B7280",
+        "header_font": "Arial Black", "body_font": "Arial",
+        "title_bold": True, "title_size": 4400, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "990011", "gradient_end": "B81A2C",
+    },
+    "nature": {
+        "name": "Nature",
+        "primary": "2C5F2D", "secondary": "97BC62", "accent": "F5F5F5",
+        "bg_light": "FAFFF5", "bg_dark": "2C5F2D",
+        "text_on_dark": "FFFFFF", "text_on_light": "1A2E1B",
+        "text_muted": "6B7280",
+        "header_font": "Georgia", "body_font": "Calibri",
+        "title_bold": True, "title_size": 4000, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "2C5F2D", "gradient_end": "4A7F4B",
+    },
+    "ocean": {
+        "name": "Ocean",
+        "primary": "065A82", "secondary": "1C7293", "accent": "9FFFCB",
+        "bg_light": "F0F8FF", "bg_dark": "02364A",
+        "text_on_dark": "FFFFFF", "text_on_light": "02364A",
+        "text_muted": "64748B",
+        "header_font": "Calibri", "body_font": "Calibri",
+        "title_bold": True, "title_size": 4000, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "065A82", "gradient_end": "1C7293",
+    },
+    "elegant": {
+        "name": "Elegant",
+        "primary": "2C3E50", "secondary": "E8E8E8", "accent": "E74C3C",
+        "bg_light": "FAFAFA", "bg_dark": "1A1A2E",
+        "text_on_dark": "FFFFFF", "text_on_light": "2C3E50",
+        "text_muted": "7F8C8D",
+        "header_font": "Georgia", "body_font": "Calibri",
+        "title_bold": True, "title_size": 4200, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "2C3E50", "gradient_end": "34495E",
+    },
+    "modern": {
+        "name": "Modern",
+        "primary": "6C5CE7", "secondary": "A29BFE", "accent": "FD79A8",
+        "bg_light": "F8F9FA", "bg_dark": "2D3436",
+        "text_on_dark": "FFFFFF", "text_on_light": "2D3436",
+        "text_muted": "636E72",
+        "header_font": "Segoe UI", "body_font": "Segoe UI",
+        "title_bold": True, "title_size": 4000, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "6C5CE7", "gradient_end": "A29BFE",
+    },
+    "sunset": {
+        "name": "Sunset",
+        "primary": "E17055", "secondary": "FDCB6E", "accent": "D63031",
+        "bg_light": "FFF9F0", "bg_dark": "2D142C",
+        "text_on_dark": "FFFFFF", "text_on_light": "2D142C",
+        "text_muted": "8B7355",
+        "header_font": "Georgia", "body_font": "Calibri",
+        "title_bold": True, "title_size": 4000, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "E17055", "gradient_end": "FDCB6E",
+    },
+    "forest": {
+        "name": "Forest",
+        "primary": "1B4332", "secondary": "52B788", "accent": "D8F3DC",
+        "bg_light": "F1F8E9", "bg_dark": "081C15",
+        "text_on_dark": "FFFFFF", "text_on_light": "1B4332",
+        "text_muted": "52796F",
+        "header_font": "Cambria", "body_font": "Calibri",
+        "title_bold": True, "title_size": 4000, "body_size": 1800, "caption_size": 1200,
+        "gradient_start": "1B4332", "gradient_end": "2D6A4F",
+    },
+}
+
+DARK_BG_TYPES = {"title", "section", "conclusion"}
+
+LAYOUT_VARIANTS = [
+    "accent_bar", "accent_bar", "numbered_list", "stat_highlight",
+    "two_tone", "header_band", "card_grid", "timeline",
+    "split_diagonal", "image_focus", "quote_block",
+]
+
+
+def _build_template_theme(
+    template_colors: Dict[str, str],
+    template_fonts: Dict[str, str],
+    beautify_theme: Optional[str] = None,
+) -> dict:
+    """Build a beautify-compatible theme from template colors and fonts.
+
+    If beautify_theme is specified, use that theme's design system (fonts, sizes, gradients)
+    but replace the colors with the template's actual palette. This gives us the best of
+    both worlds: the template's authentic colors + beautify's professional design system.
+    """
+    base = None
+    if beautify_theme and beautify_theme in THEMES:
+        base = dict(THEMES[beautify_theme])
+    else:
+        # Default to minimal for fonts/sizes, use template for colors
+        base = dict(THEMES["minimal"])
+
+    # Override colors with template's actual palette
+    base["primary"]       = template_colors.get("primary", base["primary"])
+    base["secondary"]     = template_colors.get("secondary", base["secondary"])
+    base["accent"]         = template_colors.get("accent", base["accent"])
+    base["bg_light"]       = template_colors.get("bg_light", base["bg_light"])
+    base["bg_dark"]        = template_colors.get("bg_dark", base["bg_dark"])
+    base["text_on_light"]  = template_colors.get("text_on_light", base["text_on_light"])
+    base["text_on_dark"]   = template_colors.get("text_on_dark", base["text_on_dark"])
+
+    # Use template fonts if available
+    if template_fonts.get("major_latin"):
+        base["header_font"] = template_fonts["major_latin"]
+    if template_fonts.get("minor_latin"):
+        base["body_font"] = template_fonts["minor_latin"]
+
+    # Derive gradient from template primary/secondary
+    base["gradient_start"] = base["primary"]
+    base["gradient_end"]   = base["secondary"]
+
+    return base
+
+
+def _pick_layout_variant(
+    slide_type: str,
+    body_items: list,
+    layout_streak: list,
+    slide_index: int,
+) -> str:
+    """Choose a layout variant to maximize visual variety."""
+    if slide_type not in ("content", "list_content", "agenda"):
+        return "none"
+
+    recent = layout_streak[-3:] if len(layout_streak) >= 3 else layout_streak
+    recent_set = set(recent)
+    candidates = [v for v in LAYOUT_VARIANTS if v not in recent_set]
+    if not candidates:
+        candidates = LAYOUT_VARIANTS[:]
+
+    if len(body_items) >= 4 and "numbered_list" in candidates:
+        return "numbered_list"
+    elif len(body_items) <= 2 and any(c.isdigit() for c in " ".join(body_items)):
+        if "stat_highlight" in candidates:
+            return "stat_highlight"
+    elif slide_index % 4 == 3 and "two_tone" in candidates:
+        return "two_tone"
+
+    return candidates[slide_index % len(candidates)]
+
+
+def _restructure_slide(
+    xml: str, theme: dict, layout_variant: str,
+    body_items: list, use_dark: bool,
+) -> str:
+    """Apply structural layout changes using template theme colors."""
+    if layout_variant == "none" or not layout_variant:
+        return xml
+    existing_sp_count = xml.count("<p:sp>")
+    if existing_sp_count > 6:
+        return xml
+
+    primary = theme["primary"]
+    secondary = theme["secondary"]
+    accent = theme["accent"]
+
+    if layout_variant == "two_tone":
+        xml = _add_two_tone_panel(xml, primary)
+    elif layout_variant == "header_band":
+        xml = _add_header_band(xml, primary)
+    elif layout_variant == "numbered_list":
+        xml = _add_numbered_circles(xml, primary, body_items)
+    elif layout_variant == "stat_highlight":
+        xml = _add_stat_highlight(xml, primary, accent, body_items)
+    elif layout_variant == "card_grid":
+        xml = _add_card_grid(xml, primary, accent, body_items, use_dark)
+    elif layout_variant == "timeline":
+        xml = _add_timeline(xml, primary, accent, body_items)
+    elif layout_variant == "split_diagonal":
+        xml = _add_split_diagonal(xml, primary, secondary, use_dark)
+    elif layout_variant == "image_focus":
+        xml = _add_image_focus_frame(xml, primary)
+    elif layout_variant == "quote_block":
+        xml = _add_quote_block(xml, primary, accent, body_items, use_dark)
+
+    return xml
+
+
+def _add_two_tone_panel(xml: str, primary: str) -> str:
+    panel_xml = (
+        '\n<p:sp><p:nvSpPr>'
+        '<p:cNvPr id="9010" name="TwoTonePanel"/>'
+        '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        '</p:nvSpPr><p:spPr>'
+        '<a:xfrm><a:off x="0" y="0"/><a:ext cx="3200400" cy="5143500"/></a:xfrm>'
+        '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"><a:alpha val="92000"/></a:srgbClr></a:solidFill>'
+        '<a:ln><a:noFill/></a:ln>'
+        '</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        '</p:sp>'
+    )
+    if "</p:spTree>" in xml and "TwoTonePanel" not in xml:
+        xml = xml.replace("<p:spTree>", "<p:spTree>" + panel_xml, 1)
+    return xml
+
+
+def _add_header_band(xml: str, primary: str) -> str:
+    band_xml = (
+        '\n<p:sp><p:nvSpPr>'
+        '<p:cNvPr id="9011" name="HeaderBand"/>'
+        '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        '</p:nvSpPr><p:spPr>'
+        '<a:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="1143000"/></a:xfrm>'
+        '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        '<a:ln><a:noFill/></a:ln>'
+        '</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        '</p:sp>'
+    )
+    if "</p:spTree>" in xml and "HeaderBand" not in xml:
+        xml = xml.replace("<p:spTree>", "<p:spTree>" + band_xml, 1)
+    return xml
+
+
+def _add_numbered_circles(xml: str, primary: str, body_items: list) -> str:
+    if not body_items:
+        return xml
+    count = min(len(body_items), 6)
+    circle_size = 411480
+    start_y = 1188000
+    row_height = 685800
+    circle_x = 320040
+    circles_xml = ""
+    for idx in range(count):
+        cy = start_y + idx * row_height
+        circles_xml += (
+            f'\n<p:sp><p:nvSpPr>'
+            f'<p:cNvPr id="{9020 + idx}" name="NumCircle{idx}"/>'
+            f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+            f'</p:nvSpPr><p:spPr>'
+            f'<a:xfrm><a:off x="{circle_x}" y="{cy}"/>'
+            f'<a:ext cx="{circle_size}" cy="{circle_size}"/></a:xfrm>'
+            f'<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
+            f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+            f'<a:ln><a:noFill/></a:ln>'
+            f'</p:spPr><p:txBody>'
+            f'<a:bodyPr anchor="ctr"/><a:lstStyle/>'
+            f'<a:p><a:pPr algn="ctr"/>'
+            f'<a:r><a:rPr lang="en-US" sz="1400" b="1" dirty="0">'
+            f'<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>'
+            f'</a:rPr><a:t>{idx + 1}</a:t></a:r>'
+            f'</a:p></p:txBody></p:sp>'
+        )
+    if "</p:spTree>" in xml and "NumCircle0" not in xml:
+        xml = xml.replace("</p:spTree>", circles_xml + "</p:spTree>")
+    return xml
+
+
+def _add_stat_highlight(xml: str, primary: str, accent: str, body_items: list) -> str:
+    if not body_items:
+        return xml
+    first_item = body_items[0][:50]
+    stat_xml = (
+        '\n<p:sp><p:nvSpPr>'
+        '<p:cNvPr id="9030" name="StatCallout"/>'
+        '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        '</p:nvSpPr><p:spPr>'
+        '<a:xfrm><a:off x="457200" y="1280160"/><a:ext cx="3657600" cy="2286000"/></a:xfrm>'
+        '<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 16667"/></a:avLst></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        '<a:ln><a:noFill/></a:ln>'
+        '</p:spPr><p:txBody>'
+        '<a:bodyPr anchor="ctr" wrap="square"/><a:lstStyle/>'
+        '<a:p><a:pPr algn="ctr"/>'
+        f'<a:r><a:rPr lang="zh-CN" sz="2400" b="1" dirty="0">'
+        f'<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>'
+        f'</a:rPr><a:t>{first_item}</a:t></a:r>'
+        '</a:p></p:txBody></p:sp>'
+    )
+    if "</p:spTree>" in xml and "StatCallout" not in xml:
+        xml = xml.replace("</p:spTree>", stat_xml + "</p:spTree>")
+    return xml
+
+
+def _add_card_grid(xml: str, primary: str, accent: str, body_items: list, use_dark: bool) -> str:
+    if not body_items or len(body_items) < 2:
+        return xml
+    count = min(len(body_items), 4)
+    cards_per_row = 2 if count > 2 else count
+    card_width = 3200400
+    card_height = 1371600
+    gap = 228600
+    start_x = 914400
+    start_y = 1371600
+    bg_color = "FFFFFF" if not use_dark else "1A1A2E"
+    text_color = "000000" if not use_dark else "FFFFFF"
+    cards_xml = ""
+    for idx in range(count):
+        row = idx // cards_per_row
+        col = idx % cards_per_row
+        cx = start_x + col * (card_width + gap)
+        cy = start_y + row * (card_height + gap)
+        card_color = primary if idx % 2 == 0 else accent
+        if use_dark and card_color == accent:
+            card_color = primary
+        item_text = body_items[idx][:40] if idx < len(body_items) else ""
+        cards_xml += (
+            f'\n<p:sp><p:nvSpPr>'
+            f'<p:cNvPr id="{9040 + idx}" name="Card{idx}"/>'
+            f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+            f'</p:nvSpPr><p:spPr>'
+            f'<a:xfrm><a:off x="{cx}" y="{cy}"/>'
+            f'<a:ext cx="{card_width}" cy="{card_height}"/></a:xfrm>'
+            f'<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 10000"/></a:avLst></a:prstGeom>'
+            f'<a:solidFill><a:srgbClr val="{card_color}"><a:alpha val="15000"/></a:srgbClr></a:solidFill>'
+            f'<a:ln><a:solidFill><a:srgbClr val="{card_color}"/></a:solidFill></a:ln>'
+            f'</p:spPr><p:txBody>'
+            f'<a:bodyPr anchor="ctr" wrap="square"/><a:lstStyle/>'
+            f'<a:p><a:pPr algn="ctr"/>'
+            f'<a:r><a:rPr lang="zh-CN" sz="1600" b="1" dirty="0">'
+            f'<a:solidFill><a:srgbClr val="{text_color}"/></a:solidFill>'
+            f'</a:rPr><a:t>{item_text}</a:t></a:r>'
+            f'</a:p></p:txBody></p:sp>'
+        )
+    if "</p:spTree>" in xml and "Card0" not in xml:
+        xml = xml.replace("</p:spTree>", cards_xml + "</p:spTree>")
+    return xml
+
+
+def _add_timeline(xml: str, primary: str, accent: str, body_items: list) -> str:
+    if not body_items or len(body_items) < 2:
+        return xml
+    count = min(len(body_items), 5)
+    timeline_y = 2286000
+    start_x = 685800
+    end_x = 8458200
+    step = (end_x - start_x) // (count - 1) if count > 1 else 0
+    timeline_xml = (
+        f'\n<p:sp><p:nvSpPr>'
+        f'<p:cNvPr id="9050" name="TimelineLine"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        f'</p:nvSpPr><p:spPr>'
+        f'<a:xfrm><a:off x="{start_x}" y="{timeline_y}"/>'
+        f'<a:ext cx="{end_x - start_x}" cy="76200"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        f'</p:sp>'
+    )
+    for idx in range(count):
+        cx = start_x + idx * step
+        item_text = body_items[idx][:25] if idx < len(body_items) else ""
+        timeline_xml += (
+            f'\n<p:sp><p:nvSpPr>'
+            f'<p:cNvPr id="{9060 + idx}" name="TimelineNode{idx}"/>'
+            f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+            f'</p:nvSpPr><p:spPr>'
+            f'<a:xfrm><a:off x="{cx - 228600}" y="{timeline_y - 190500}"/>'
+            f'<a:ext cx="457200" cy="457200"/></a:xfrm>'
+            f'<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
+            f'<a:solidFill><a:srgbClr val="{accent}"/></a:solidFill>'
+            f'<a:ln><a:solidFill><a:srgbClr val="{primary}"/></a:solidFill></a:ln>'
+            f'</p:spPr><p:txBody>'
+            f'<a:bodyPr anchor="ctr"/><a:lstStyle/>'
+            f'<a:p><a:pPr algn="ctr"/>'
+            f'<a:r><a:rPr lang="en-US" sz="1400" b="1" dirty="0">'
+            f'<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>'
+            f'</a:rPr><a:t>{idx + 1}</a:t></a:r>'
+            f'</a:p></p:txBody></p:sp>'
+            f'\n<p:sp><p:nvSpPr>'
+            f'<p:cNvPr id="{9070 + idx}" name="TimelineLabel{idx}"/>'
+            f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+            f'</p:nvSpPr><p:spPr>'
+            f'<a:xfrm><a:off x="{cx - 457200}" y="{timeline_y + 685800}"/>'
+            f'<a:ext cx="914400" cy="457200"/></a:xfrm>'
+            f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+            f'<a:noFill/><a:ln><a:noFill/></a:ln>'
+            f'</p:spPr><p:txBody>'
+            f'<a:bodyPr anchor="ctr" wrap="square"/><a:lstStyle/>'
+            f'<a:p><a:pPr algn="ctr"/>'
+            f'<a:r><a:rPr lang="zh-CN" sz="1200" dirty="0">'
+            f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+            f'</a:rPr><a:t>{item_text}</a:t></a:r>'
+            f'</a:p></p:txBody></p:sp>'
+        )
+    if "</p:spTree>" in xml and "TimelineLine" not in xml:
+        xml = xml.replace("</p:spTree>", timeline_xml + "</p:spTree>")
+    return xml
+
+
+def _add_split_diagonal(xml: str, primary: str, secondary: str, use_dark: bool) -> str:
+    diagonal_xml = (
+        '\n<p:sp><p:nvSpPr>'
+        '<p:cNvPr id="9080" name="DiagonalSplit"/>'
+        '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        '</p:nvSpPr><p:spPr>'
+        '<a:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="5143500"/></a:xfrm>'
+        '<a:custGeom><a:avLst/>'
+        '<a:gdLst>'
+        '<a:gd name="x1" fmla="val 0"/><a:gd name="y1" fmla="val 0"/>'
+        '<a:gd name="x2" fmla="val 4572000"/><a:gd name="y2" fmla="val 0"/>'
+        '<a:gd name="x3" fmla="val 9144000"/><a:gd name="y3" fmla="val 5143500"/>'
+        '<a:gd name="x4" fmla="val 0"/><a:gd name="y4" fmla="val 5143500"/>'
+        '</a:gdLst>'
+        '<a:pathLst><a:path w="9144000" h="5143500">'
+        '<a:moveTo><a:pt x="x1" y="y1"/></a:moveTo>'
+        '<a:lnTo><a:pt x="x2" y="y2"/></a:lnTo>'
+        '<a:lnTo><a:pt x="x3" y="y3"/></a:lnTo>'
+        '<a:lnTo><a:pt x="x4" y="y4"/></a:lnTo>'
+        '<a:close/></a:path></a:pathLst>'
+        '</a:custGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"><a:alpha val="20000"/></a:srgbClr></a:solidFill>'
+        '<a:ln><a:noFill/></a:ln>'
+        '</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        '</p:sp>'
+    )
+    if "</p:spTree>" in xml and "DiagonalSplit" not in xml:
+        xml = xml.replace("<p:spTree>", "<p:spTree>" + diagonal_xml, 1)
+    return xml
+
+
+def _add_image_focus_frame(xml: str, primary: str) -> str:
+    frame_xml = (
+        '\n<p:sp><p:nvSpPr>'
+        '<p:cNvPr id="9090" name="ImageFrame"/>'
+        '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        '</p:nvSpPr><p:spPr>'
+        '<a:xfrm><a:off x="457200" y="457200"/><a:ext cx="8229600" cy="4229100"/></a:xfrm>'
+        '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        '<a:noFill/>'
+        f'<a:ln w="76200"><a:solidFill><a:srgbClr val="{primary}"/></a:solidFill></a:ln>'
+        '</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        '</p:sp>'
+        f'\n<p:sp><p:nvSpPr>'
+        f'<p:cNvPr id="9091" name="CornerTL"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        f'</p:nvSpPr><p:spPr>'
+        f'<a:xfrm><a:off x="457200" y="457200"/><a:ext cx="228600" cy="228600"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        f'</p:sp>'
+        f'\n<p:sp><p:nvSpPr>'
+        f'<p:cNvPr id="9092" name="CornerBR"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        f'</p:nvSpPr><p:spPr>'
+        f'<a:xfrm><a:off x="8458200" y="4229100"/><a:ext cx="228600" cy="228600"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        f'</p:sp>'
+    )
+    if "</p:spTree>" in xml and "ImageFrame" not in xml:
+        xml = xml.replace("</p:spTree>", frame_xml + "</p:spTree>")
+    return xml
+
+
+def _add_quote_block(xml: str, primary: str, accent: str, body_items: list, use_dark: bool) -> str:
+    if not body_items:
+        return xml
+    quote_text = body_items[0][:80]
+    text_color = "000000" if not use_dark else "FFFFFF"
+    quote_xml = (
+        f'\n<p:sp><p:nvSpPr>'
+        f'<p:cNvPr id="9100" name="QuoteBar"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        f'</p:nvSpPr><p:spPr>'
+        f'<a:xfrm><a:off x="1371600" y="1371600"/><a:ext cx="114300" cy="2746380"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{accent}"/></a:solidFill>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f'</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        f'</p:sp>'
+        f'\n<p:sp><p:nvSpPr>'
+        f'<p:cNvPr id="9101" name="QuoteMark"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        f'</p:nvSpPr><p:spPr>'
+        f'<a:xfrm><a:off x="914400" y="1143000"/><a:ext cx="457200" cy="457200"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:noFill/><a:ln><a:noFill/></a:ln>'
+        f'</p:spPr><p:txBody>'
+        f'<a:bodyPr anchor="ctr"/><a:lstStyle/>'
+        f'<a:p><a:pPr algn="ctr"/>'
+        f'<a:r><a:rPr lang="en-US" sz="4800" i="1" dirty="0">'
+        f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+        f'</a:rPr><a:t>"</a:t></a:r>'
+        f'</a:p></p:txBody></p:sp>'
+        f'\n<p:sp><p:nvSpPr>'
+        f'<p:cNvPr id="9102" name="QuoteText"/>'
+        f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        f'</p:nvSpPr><p:spPr>'
+        f'<a:xfrm><a:off x="1600200" y="1600200"/><a:ext cx="5943600" cy="2286000"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:noFill/><a:ln><a:noFill/></a:ln>'
+        f'</p:spPr><p:txBody>'
+        f'<a:bodyPr anchor="ctr" wrap="square"/><a:lstStyle/>'
+        f'<a:p><a:pPr algn="l"/>'
+        f'<a:r><a:rPr lang="zh-CN" sz="2000" i="1" dirty="0">'
+        f'<a:solidFill><a:srgbClr val="{text_color}"/></a:solidFill>'
+        f'</a:rPr><a:t>{quote_text}</a:t></a:r>'
+        f'</a:p></p:txBody></p:sp>'
+    )
+    if "</p:spTree>" in xml and "QuoteBar" not in xml:
+        xml = xml.replace("</p:spTree>", quote_xml + "</p:spTree>")
+    return xml
+
+
+def _set_background(xml: str, theme: dict, use_dark: bool) -> str:
+    bg_color = theme["bg_dark"] if use_dark else theme["bg_light"]
+    if "<p:bg>" in xml:
+        xml = re.sub(
+            r'(<p:bg>.*?<a:solidFill>.*?<a:srgbClr val=")[0-9A-Fa-f]{6}(")',
+            lambda m: m.group(1) + bg_color + m.group(2),
+            xml, flags=re.DOTALL,
+        )
+    else:
+        bg_xml = (
+            f'\n  <p:bg><p:bgPr>'
+            f'<a:solidFill><a:srgbClr val="{bg_color}"/></a:solidFill>'
+            f'<a:effectLst/></p:bgPr></p:bg>'
+        )
+        xml = re.sub(r'(<p:cSld[^>]*>)', r'\1' + bg_xml, xml, count=1)
+    return xml
+
+
+def _set_gradient_background(xml: str, theme: dict, use_dark: bool) -> str:
+    start_color = theme.get("gradient_start", theme["primary"])
+    end_color = theme.get("gradient_end", theme["secondary"])
+    gradient_xml = (
+        f'\n  <p:bg><p:bgPr>'
+        f'<a:gradFill rotWithShape="1">'
+        f'<a:gsLst>'
+        f'<a:gs pos="0"><a:srgbClr val="{start_color}"/></a:gs>'
+        f'<a:gs pos="100000"><a:srgbClr val="{end_color}"/></a:gs>'
+        f'</a:gsLst>'
+        f'<a:lin ang="2700000" scaled="1"/>'
+        f'<a:tileRect/></a:gradFill>'
+        f'<a:effectLst/></p:bgPr></p:bg>'
+    )
+    if "<p:bg>" in xml:
+        xml = re.sub(r'<p:bg>.*?</p:bg>', gradient_xml.strip(), xml, flags=re.DOTALL)
+    else:
+        xml = re.sub(r'(<p:cSld[^>]*>)', r'\1' + gradient_xml, xml, count=1)
+    return xml
+
+
+def _update_text_colors(xml: str, theme: dict, use_dark: bool) -> str:
+    title_color = theme["text_on_dark"] if use_dark else theme["primary"]
+    body_color  = theme["text_on_dark"] if use_dark else theme["text_on_light"]
+
+    def recolor_sp(m):
+        sp_xml = m.group(0)
+        is_title = bool(re.search(r'<p:ph[^>]*type="(?:title|ctrTitle)"', sp_xml))
+        color = title_color if is_title else body_color
+
+        def recolor_rpr(rm):
+            rpr = rm.group(0)
+            if "<a:solidFill>" not in rpr:
+                return rpr
+            new_rpr = re.sub(
+                r'<a:solidFill>.*?</a:solidFill>',
+                f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>',
+                rpr, flags=re.DOTALL,
+            )
+            return new_rpr
+
+        return re.sub(r'<a:rPr\b.*?</a:rPr>', recolor_rpr, sp_xml, flags=re.DOTALL)
+
+    xml = re.sub(r'<p:sp\b.*?</p:sp>', recolor_sp, xml, flags=re.DOTALL)
+    return xml
+
+
+def _update_shape_colors(xml: str, theme: dict, use_dark: bool) -> str:
+    accent_color = theme["accent"] if use_dark else theme["primary"]
+    bg_light = theme["bg_light"].upper()
+    bg_dark  = theme["bg_dark"].upper()
+
+    def replace_accent(m):
+        color = m.group(1).upper()
+        r = int(color[0:2], 16)
+        g = int(color[2:4], 16)
+        b = int(color[4:6], 16)
+        luminance = (r + g + b) / 3
+        if luminance > 235 or luminance < 20 or color in (bg_light, bg_dark):
+            return m.group(0)
+        return f'<a:solidFill><a:srgbClr val="{accent_color}"/></a:solidFill>'
+
+    def process_sppr(m):
+        sppr = m.group(0)
+        sppr = re.sub(
+            r'<a:solidFill><a:srgbClr val="([0-9A-Fa-f]{6})"/></a:solidFill>',
+            replace_accent, sppr,
+        )
+        return sppr
+
+    xml = re.sub(r'<p:spPr>.*?</p:spPr>', process_sppr, xml, flags=re.DOTALL)
+    return xml
+
+
+def _update_fonts(xml: str, theme: dict) -> str:
+    header_font = theme.get("header_font", "Calibri")
+    body_font = theme.get("body_font", "Calibri")
+    common_fonts = [
+        "Arial", "Helvetica", "Times New Roman", "Times", "Calibri",
+        "Cambria", "Verdana", "Tahoma", "Trebuchet MS", "Georgia",
+        "Palatino", "Garamond", "Comic Sans MS", "Impact",
+        "Calibri Light", "Century Gothic",
+    ]
+
+    def replace_font(m):
+        typeface = m.group(1)
+        if any(f.lower() == typeface.lower() for f in common_fonts):
+            return f'<a:latin typeface="{body_font}"'
+        return m.group(0)
+
+    xml = re.sub(r'<a:latin typeface="([^"]+)"', replace_font, xml)
+    return xml
+
+
+def _enhance_images(xml: str, theme: dict, use_dark: bool) -> str:
+    primary = theme["primary"]
+
+    def enhance_pic(m):
+        pic_xml = m.group(0)
+        if "<a:blip" not in pic_xml:
+            return pic_xml
+        if '<a:prstGeom prst="rect"' in pic_xml:
+            pic_xml = pic_xml.replace(
+                '<a:prstGeom prst="rect"><a:avLst/>',
+                '<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 10000"/></a:avLst>',
+            )
+        if '<a:effectLst>' not in pic_xml and '<p:spPr>' in pic_xml:
+            shadow_xml = (
+                '<a:effectLst>'
+                '<a:outerShdw blurRad="63500" dist="50800" dir="2700000" algn="bl">'
+                '<a:srgbClr val="000000"><a:alpha val="25000"/></a:srgbClr>'
+                '</a:outerShdw></a:effectLst>'
+            )
+            pic_xml = pic_xml.replace('</p:spPr>', shadow_xml + '</p:spPr>')
+        if '<a:ln>' not in pic_xml and '<p:spPr>' in pic_xml:
+            border_xml = (
+                f'<a:ln w="12700">'
+                f'<a:solidFill><a:srgbClr val="{primary}"/></a:solidFill>'
+                f'</a:ln>'
+            )
+            pic_xml = pic_xml.replace('</p:spPr>', border_xml + '</p:spPr>')
+        return pic_xml
+
+    xml = re.sub(r'<p:pic>.*?</p:pic>', enhance_pic, xml, flags=re.DOTALL)
+    return xml
+
+
+def _beautify_tables(xml: str, theme: dict, use_dark: bool) -> str:
+    if '<a:tbl>' not in xml:
+        return xml
+    primary = theme["primary"]
+    accent = theme["accent"]
+    header_bg = primary
+    header_text = "FFFFFF"
+    stripe_light = "FFFFFF"
+    stripe_dark = _lighten_color(primary, 92)
+    body_text = theme.get("text_on_light", "333333")
+
+    def process_table(tbl_match):
+        tbl_xml = tbl_match.group(0)
+        row_pattern = re.compile(r'<a:tr[^>]*>(.*?)</a:tr>', re.DOTALL)
+        rows = list(row_pattern.finditer(tbl_xml))
+        if not rows:
+            return tbl_xml
+
+        for i, row_match in enumerate(rows):
+            row_xml = row_match.group(0)
+            is_header = (i == 0)
+            is_stripe = (i % 2 == 0)
+            if is_header:
+                row_bg = f'<a:solidFill><a:srgbClr val="{header_bg}"/></a:solidFill>'
+            elif is_stripe:
+                row_bg = f'<a:solidFill><a:srgbClr val="{stripe_light}"/></a:solidFill>'
+            else:
+                row_bg = f'<a:solidFill><a:srgbClr val="{stripe_dark}"/></a:solidFill>'
+
+            def process_cell(cell_match):
+                cell_xml = cell_match.group(0)
+                tcpr_match = re.search(r'<a:tcPr[^>]*>(.*?)</a:tcPr>', cell_xml, re.DOTALL)
+                if tcpr_match:
+                    tcpr = tcpr_match.group(0)
+                    tcpr = re.sub(r'<a:solidFill>.*?</a:solidFill>', '', tcpr, flags=re.DOTALL)
+                    tcpr = re.sub(r'(<a:tcPr[^>]*>)', r'\1' + row_bg, tcpr, count=1)
+                    cell_xml = cell_xml.replace(tcpr_match.group(0), tcpr)
+                else:
+                    cell_xml = re.sub(
+                        r'(<a:tc[^>]*>)',
+                        r'\1<a:tcPr>' + row_bg +
+                        f'<a:lnL w="12700"><a:solidFill><a:srgbClr val="{accent}"/></a:solidFill></a:lnL>'
+                        f'<a:lnR w="12700"><a:solidFill><a:srgbClr val="{accent}"/></a:solidFill></a:lnR>'
+                        f'<a:lnT w="12700"><a:solidFill><a:srgbClr val="{accent}"/></a:solidFill></a:lnT>'
+                        f'<a:lnB w="12700"><a:solidFill><a:srgbClr val="{accent}"/></a:solidFill></a:lnB>'
+                        '<a:cellMar><a:l mar="91440"/><a:r mar="91440"/><a:t mar="45720"/><a:b mar="45720"/></a:cellMar>',
+                        cell_xml, count=1
+                    )
+                if is_header:
+                    cell_xml = re.sub(
+                        r'<a:rPr([^>]*)>',
+                        r'<a:rPr\1><a:solidFill><a:srgbClr val="' + header_text + '"/></a:solidFill>',
+                        cell_xml
+                    )
+                    cell_xml = re.sub(
+                        r'<a:rPr([^>]*)(/>|><a:)',
+                        r'<a:rPr\1><a:solidFill><a:srgbClr val="' + header_text + '"/></a:solidFill><a:',
+                        cell_xml
+                    )
+                return cell_xml
+
+            row_xml = re.sub(r'<a:tc>.*?</a:tc>', process_cell, row_xml, flags=re.DOTALL)
+            tbl_xml = tbl_xml[:row_match.start()] + row_xml + tbl_xml[row_match.end():]
+            row_pattern = re.compile(r'<a:tr[^>]*>(.*?)</a:tr>', re.DOTALL)
+            rows = list(row_pattern.finditer(tbl_xml))
+
+        return tbl_xml
+
+    xml = re.sub(r'<a:tbl>.*?</a:tbl>', process_table, xml, flags=re.DOTALL)
+    return xml
+
+
+def _lighten_color(hex_color: str, percent: int) -> str:
+    hex_color = hex_color.lstrip('#')
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    factor = percent / 100
+    r = int(r + (255 - r) * factor)
+    g = int(g + (255 - g) * factor)
+    b = int(b + (255 - b) * factor)
+    return f"{r:02X}{g:02X}{b:02X}"
+
+
+def _optimize_paragraph_spacing(xml: str, theme: dict) -> str:
+    def add_spacing(m):
+        p_xml = m.group(0)
+        if '<a:lnSpc' in p_xml:
+            return p_xml
+        spacing_xml = '<a:lnSpc><a:spcPct val="120000"/></a:lnSpc>'
+        if '<a:pPr' in p_xml:
+            p_xml = p_xml.replace('</a:pPr>', spacing_xml + '</a:pPr>')
+        else:
+            p_xml = p_xml.replace('<a:p>', '<a:p><a:pPr>' + spacing_xml + '</a:pPr>')
+        return p_xml
+
+    xml = re.sub(r'<a:p>.*?</a:p>', add_spacing, xml, flags=re.DOTALL)
+    return xml
+
+
+def _remove_antipatterns(xml: str) -> str:
+    def remove_accent_underlines(m):
+        sp_xml = m.group(0)
+        if '<p:ph' in sp_xml:
+            return sp_xml
+        if re.search(r'cy="[1-9][0-9]{3}"', sp_xml) and re.search(r'cx="[5-9][0-9]{5,}"', sp_xml):
+            if '<a:solidFill>' in sp_xml and '<p:ph' not in sp_xml:
+                return ''
+        return sp_xml
+
+    xml = re.sub(r'<p:sp\b.*?</p:sp>', remove_accent_underlines, xml, flags=re.DOTALL)
+    return xml
+
+
+def _add_accent_bar(xml: str, theme: dict) -> str:
+    accent_bar = (
+        '\n<p:sp><p:nvSpPr>'
+        '<p:cNvPr id="9001" name="AccentBar"/>'
+        '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/>'
+        '</p:nvSpPr><p:spPr>'
+        '<a:xfrm><a:off x="274638" y="640080"/><a:ext cx="45720" cy="4115040"/></a:xfrm>'
+        '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{theme["primary"]}"/></a:solidFill>'
+        '<a:ln><a:noFill/></a:ln>'
+        '</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        '</p:sp>'
+    )
+    if "</p:spTree>" in xml and "AccentBar" not in xml:
+        xml = xml.replace("</p:spTree>", accent_bar + "</p:spTree>")
+    return xml
+
+
+def _apply_theme_to_master(unpacked_dir: Path, theme: dict, verbose: bool) -> None:
+    """Update the slide master with template/theme colors and fonts."""
+    master_dir = unpacked_dir / "ppt" / "slideMasters"
+    if not master_dir.exists():
+        return
+    for master_path in master_dir.glob("slideMaster*.xml"):
+        if verbose:
+            print(f"  Updating master: {master_path.name}")
+        xml = master_path.read_text(encoding="utf-8")
+        # Update master color scheme
+        xml = re.sub(
+            r'(<a:dk1>.*?<a:srgbClr val=")[0-9A-Fa-f]{6}(")',
+            lambda m: m.group(1) + theme.get("text_on_light", "1E2761") + m.group(2),
+            xml, flags=re.DOTALL
+        )
+        xml = re.sub(
+            r'(<a:lt1>.*?<a:srgbClr val=")[0-9A-Fa-f]{6}(")',
+            lambda m: m.group(1) + theme.get("bg_light", "FFFFFF") + m.group(2),
+            xml, flags=re.DOTALL
+        )
+        xml = _update_fonts(xml, theme)
+        master_path.write_text(xml, encoding="utf-8")
+
+
+def _update_theme_xml(unpacked_dir: Path, theme: dict, verbose: bool) -> None:
+    """Update theme XML with the template's actual color palette."""
+    theme_dir = unpacked_dir / "ppt" / "theme"
+    if not theme_dir.exists():
+        return
+    for theme_path in theme_dir.glob("theme*.xml"):
+        if verbose:
+            print(f"  Updating theme: {theme_path.name}")
+        xml = theme_path.read_text(encoding="utf-8")
+
+        replacements = {
+            "dk1": theme.get("text_on_light", "1E2761"),
+            "lt1": theme.get("bg_light", "FFFFFF"),
+            "accent1": theme.get("primary", "1E2761"),
+            "accent2": theme.get("secondary", "CADCFC"),
+            "accent3": theme.get("accent", "C9A84C"),
+            "dk2": theme.get("bg_dark", "1E2761"),
+        }
+        for tag, color in replacements.items():
+            xml = re.sub(
+                rf'(<a:{tag}>\s*(?:<a:srgbClr val=")[0-9A-Fa-f]{{6}}")',
+                f'<a:{tag}><a:srgbClr val="{color}"',
+                xml,
+            )
+        theme_path.write_text(xml, encoding="utf-8")
+
+
+def _beautify_slide_with_template_theme(
+    slide_path: Path,
+    theme: dict,
+    slide_type: str,
+    body_items: list,
+    layout_streak: list,
+    slide_index: int,
+    dark_mode: bool = False,
+    restructure: bool = True,
+    use_gradient: bool = False,
+    verbose: bool = False,
+) -> dict:
+    """Full beautification pipeline using template theme.
+
+    This is the deep integration point: applies beautify_ppt's full styling
+    system (backgrounds, colors, fonts, layout variants, images, tables)
+    while preserving the template's authentic color palette and font choices.
+
+    Returns beautification notes dict.
+    """
+    if not slide_path.exists():
+        return {}
+
+    xml = slide_path.read_text(encoding="utf-8")
+    original_xml = xml
+    notes = {}
+
+    # Determine background type
+    use_dark = (slide_type in DARK_BG_TYPES) or dark_mode
+    if slide_type in ("title", "section", "conclusion") and use_gradient:
+        xml = _set_gradient_background(xml, theme, use_dark)
+    else:
+        xml = _set_background(xml, theme, use_dark)
+
+    # Update text colors
+    xml = _update_text_colors(xml, theme, use_dark)
+
+    # Update accent shape colors
+    xml = _update_shape_colors(xml, theme, use_dark)
+
+    # Update fonts
+    xml = _update_fonts(xml, theme)
+
+    # Enhance images (rounded corners, shadows, borders)
+    xml = _enhance_images(xml, theme, use_dark)
+
+    # Beautify tables
+    xml = _beautify_tables(xml, theme, use_dark)
+
+    # Remove anti-patterns
+    xml = _remove_antipatterns(xml)
+
+    # Structural layout enrichment
+    if restructure and slide_type in ("content", "list_content", "agenda"):
+        layout_variant = _pick_layout_variant(
+            slide_type, body_items, layout_streak, slide_index
+        )
+        layout_streak.append(layout_variant)
+        if layout_variant and layout_variant not in ("none", "accent_bar"):
+            xml = _restructure_slide(xml, theme, layout_variant, body_items, use_dark)
+
+    # Add visual accent bar for content slides
+    if slide_type in ("content", "list_content", "agenda") and not use_dark:
+        xml = _add_accent_bar(xml, theme)
+
+    # Optimize paragraph spacing
+    xml = _optimize_paragraph_spacing(xml, theme)
+
+    # Title truncation (existing logic preserved)
+    xml = _truncate_long_titles_in_xml(xml, notes)
+
+    # Bullet point merging (existing logic preserved)
+    xml = _merge_excess_bullets_in_xml(xml, notes)
+
+    # Check for empty slides
+    text_content = re.findall(r'<a:t>([^<]+)</a:t>', xml)
+    non_empty = [t.strip() for t in text_content if t.strip() and len(t.strip()) > 1]
+    if not non_empty:
+        notes["empty_slide"] = "检测到空白幻灯片"
+
+    if xml != original_xml:
+        slide_path.write_text(xml, encoding="utf-8")
+        if verbose:
+            for key, value in notes.items():
+                print(f"    美化: {value}")
+
+    return notes
+
+
+def _truncate_long_titles_in_xml(xml: str, notes: dict) -> str:
+    def truncate_titles(m):
+        p_xml = m.group(0)
+        if '<p:ph type="title"' not in p_xml and '<p:ph type="ctrTitle"' not in p_xml:
+            return p_xml
+
+        def truncate_runs(m2):
+            run_xml = m2.group(0)
+            text_match = re.search(r'<a:t>([^<]{20,})</a:t>', run_xml)
+            if text_match:
+                long_text = text_match.group(1)
+                truncated = long_text[:18] + "…"
+                run_xml = run_xml.replace(f'<a:t>{long_text}</a:t>', f'<a:t>{truncated}</a:t>')
+                notes["title_truncated"] = f"标题截短: \"{long_text[:30]}...\" → \"{truncated}\""
+            return run_xml
+
+        return re.sub(r'<a:r>.*?</a:r>', truncate_runs, p_xml, flags=re.DOTALL)
+
+    return re.sub(r'<a:p>.*?</a:p>', truncate_titles, xml, flags=re.DOTALL)
+
+
+def _merge_excess_bullets_in_xml(xml: str, notes: dict) -> str:
+    def merge_bullets(m):
+        p_xml = m.group(0)
+        if '<p:ph type="body"' not in p_xml and '<p:ph type="obj"' not in p_xml:
+            return p_xml
+
+        bullet_count = len(re.findall(r'<a:p>.*?<a:pPr.*?<a:buChar', p_xml, flags=re.DOTALL))
+        if bullet_count <= 6:
+            return p_xml
+
+        paragraphs = list(re.finditer(r'<a:p>.*?</a:p>', p_xml, flags=re.DOTALL))
+        if len(paragraphs) <= 6:
+            return p_xml
+
+        merged_paragraphs = paragraphs[:6]
+        to_merge = paragraphs[6:]
+
+        merged_texts = []
+        for p in to_merge:
+            text_match = re.search(r'<a:t>([^<]*)</a:t>', p.group(0))
+            if text_match:
+                merged_texts.append(text_match.group(1).strip())
+
+        if merged_texts:
+            last_p = merged_paragraphs[-1].group(0)
+            merged_text = "；".join(merged_texts)
+            merged_text_xml = f'<a:r><a:rPr lang="zh-CN"/><a:t>（含{len(to_merge)}条合并：{merged_text}）</a:t></a:r>'
+            last_p = last_p.replace('</a:p>', merged_text_xml + '</a:p>')
+            p_xml = p_xml[:merged_paragraphs[-1].start()] + last_p + p_xml[merged_paragraphs[-1].end():]
+            for p in reversed(to_merge):
+                p_xml = p_xml[:p.start()] + p_xml[p.end():]
+            notes["bullets_merged"] = f"要点合并: {bullet_count}条 → 6条"
+
+        return p_xml
+
+    return re.sub(r'<a:p>.*?</a:p>', merge_bullets, xml, flags=re.DOTALL)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DEPRECATED: Old per-slide beautification (kept for reference, superseded)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _beautify_slide_layout(slide_path: Path, verbose: bool = False) -> Dict[str, any]:
@@ -1952,6 +3012,223 @@ def _beautify_slide_layout(slide_path: Path, verbose: bool = False) -> Dict[str,
     return notes
 
 
+def _find_and_replace_text_in_element(
+    elem: ET.Element,
+    ph_types: set[str],
+    new_text: str,
+    rpr_attrs: str,
+    rpr_children: str,
+) -> bool:
+    """Find placeholder element by type and replace its text content using ET.
+
+    Returns True if replacement was made, False otherwise.
+    """
+    # Check if this element is a placeholder with matching type
+    ph = elem.find("p:nvSpPr/p:nvPr/p:ph", NS)
+    if ph is not None:
+        ph_type = ph.get("type", "")
+        if ph_type in ph_types:
+            # Found matching placeholder, replace text content
+            txBody = elem.find("p:txBody", NS)
+            if txBody is not None:
+                # Clear existing paragraphs and add new one
+                for p in list(txBody):
+                    if p.tag.endswith("}p") and p.tag != f"{{{NS['p']}}}p":
+                        continue
+                    if p.tag == f"{{{NS['a']}}}p":
+                        txBody.remove(p)
+
+                # Build new paragraph with text run
+                new_p = ET.SubElement(txBody, f"{{{NS['a']}}}p")
+
+                # Handle rPr
+                if rpr_attrs.strip():
+                    # Parse rPr attributes
+                    rpr_elem = ET.SubElement(new_p, f"{{{NS['a']}}}rPr")
+                    for attr_pair in rpr_attrs.strip().split():
+                        if attr_pair.startswith("lang="):
+                            rpr_elem.set("lang", attr_pair.split("=")[1].strip('"'))
+                        elif "=" in attr_pair:
+                            key, val = attr_pair.split("=", 1)
+                            rpr_elem.set(key.strip(), val.strip('"'))
+
+                    # Add rPr children (color, fonts)
+                    for child_xml in rpr_children.split("</a:rPr>")[0].split("<a:rPr")[1:]:
+                        if child_xml.strip():
+                            child_str = f"<a:rPr{child_xml}</a:rPr>"
+                            child_elem = ET.fromstring(child_str)
+                            rpr_elem.append(child_elem)
+                else:
+                    rpr_elem = ET.SubElement(new_p, f"{{{NS['a']}}}rPr")
+                    rpr_elem.set("lang", "zh-CN")
+                    rpr_elem.set("dirty", "0")
+
+                # Add text run
+                r = ET.SubElement(new_p, f"{{{NS['a']}}}r")
+                t = ET.SubElement(r, f"{{{NS['a']}}}t")
+                t.text = new_text
+                return True
+
+    # Recursively search children
+    for child in elem:
+        if _find_and_replace_text_in_element(child, ph_types, new_text, rpr_attrs, rpr_children):
+            return True
+    return False
+
+
+def _inject_content_using_et(
+    slide_xml: str,
+    title: str,
+    subtitle: str,
+    body_xml: str,
+    title_color: str,
+    body_color: str,
+    title_latin_font: str,
+    title_ea_font: str,
+    body_latin_font: str,
+    body_ea_font: str,
+    verbose: bool,
+) -> Tuple[str, bool, bool, bool]:
+    """Inject content into slide XML using xml.etree.ElementTree.
+
+    Returns (modified_xml, title_injected, subtitle_injected, body_injected).
+    """
+    try:
+        # Parse XML with namespace handling
+        # First, add namespace declarations to make parsing reliable
+        nsmap = {
+            "p": NS["p"],
+            "a": NS["a"],
+            "r": NS["r"],
+        }
+
+        root = ET.fromstring(slide_xml)
+
+        title_injected = False
+        subtitle_injected = False
+        body_injected = False
+
+        # Find all sp elements (shapes)
+        for sp in root.iter(f"{{{NS['p']}}}sp"):
+            # Check if this is a placeholder
+            nvSpPr = sp.find("p:nvSpPr", NS)
+            if nvSpPr is None:
+                continue
+
+            nvPr = nvSpPr.find("p:nvPr", NS)
+            if nvPr is None:
+                continue
+
+            ph = nvPr.find("p:ph", NS)
+            if ph is None:
+                continue
+
+            ph_type = ph.get("type", "")
+            txBody = sp.find("p:txBody", NS)
+
+            # Title injection
+            if not title_injected and ph_type in ("title", "ctrTitle"):
+                if verbose:
+                    print(f"    [ET] Found title placeholder: type={ph_type}")
+
+                # Clear existing paragraphs
+                if txBody is not None:
+                    for p in list(txBody):
+                        p_tag = p.tag.split("}")[-1] if "}" in p.tag else p.tag
+                        if p_tag == "p":
+                            txBody.remove(p)
+
+                    # Build title text run
+                    new_p = ET.SubElement(txBody, f"{{{NS['a']}}}p")
+                    rpr_elem = ET.SubElement(new_p, f"{{{NS['a']}}}rPr")
+                    rpr_elem.set("lang", _detect_lang(title))
+                    rpr_elem.set("dirty", "0")
+
+                    if title_color:
+                        fill = ET.SubElement(rpr_elem, f"{{{NS['a']}}}solidFill")
+                        clr = ET.SubElement(fill, f"{{{NS['a']}}}srgbClr")
+                        clr.set("val", title_color)
+
+                    if title_latin_font:
+                        latin = ET.SubElement(rpr_elem, f"{{{NS['a']}}}latin")
+                        latin.set("typeface", title_latin_font)
+                    if title_ea_font:
+                        ea = ET.SubElement(rpr_elem, f"{{{NS['a']}}}ea")
+                        ea.set("typeface", title_ea_font)
+
+                    r = ET.SubElement(new_p, f"{{{NS['a']}}}r")
+                    t = ET.SubElement(r, f"{{{NS['a']}}}t")
+                    t.text = title
+                    title_injected = True
+                    if verbose:
+                        print(f"    [ET] Injected title: {title[:50]}...")
+
+            # Subtitle injection
+            elif not subtitle_injected and ph_type == "subTitle":
+                if verbose:
+                    print(f"    [ET] Found subtitle placeholder: type={ph_type}")
+
+                if txBody is not None:
+                    for p in list(txBody):
+                        p_tag = p.tag.split("}")[-1] if "}" in p.tag else p.tag
+                        if p_tag == "p":
+                            txBody.remove(p)
+
+                    new_p = ET.SubElement(txBody, f"{{{NS['a']}}}p")
+                    rpr_elem = ET.SubElement(new_p, f"{{{NS['a']}}}rPr")
+                    rpr_elem.set("lang", _detect_lang(subtitle))
+                    rpr_elem.set("dirty", "0")
+
+                    if body_color:
+                        fill = ET.SubElement(rpr_elem, f"{{{NS['a']}}}solidFill")
+                        clr = ET.SubElement(fill, f"{{{NS['a']}}}srgbClr")
+                        clr.set("val", body_color)
+
+                    r = ET.SubElement(new_p, f"{{{NS['a']}}}r")
+                    t = ET.SubElement(r, f"{{{NS['a']}}}t")
+                    t.text = subtitle
+                    subtitle_injected = True
+                    if verbose:
+                        print(f"    [ET] Injected subtitle: {subtitle[:50]}...")
+
+            # Body injection
+            elif not body_injected and ph_type in ("body", "obj"):
+                if verbose:
+                    print(f"    [ET] Found body placeholder: type={ph_type}")
+
+                if txBody is not None:
+                    # Parse body_xml and inject paragraphs
+                    body_root = ET.fromstring(f"<root xmlns:a='{NS['a']}'>{body_xml}</root>")
+                    body_paragraphs = list(body_root)
+
+                    # Remove existing paragraphs
+                    for p in list(txBody):
+                        p_tag = p.tag.split("}")[-1] if "}" in p.tag else p.tag
+                        if p_tag == "p":
+                            txBody.remove(p)
+
+                    # Add new paragraphs
+                    for p_elem in body_paragraphs:
+                        txBody.append(p_elem)
+
+                    body_injected = True
+                    if verbose:
+                        print(f"    [ET] Injected {len(body_paragraphs)} body paragraphs")
+
+        # Serialize back to string
+        modified_xml = ET.tostring(root, encoding="unicode")
+        return modified_xml, title_injected, subtitle_injected, body_injected
+
+    except ET.ParseError as e:
+        if verbose:
+            print(f"    [ET] XML parse error: {e}, falling back to regex")
+        return slide_xml, False, False, False
+    except Exception as e:
+        if verbose:
+            print(f"    [ET] Error: {e}, falling back to regex")
+        return slide_xml, False, False, False
+
+
 def _inject_content_into_slide(
     unpacked_dir: Path,
     slide_file: str,
@@ -1982,10 +3259,19 @@ def _inject_content_into_slide(
     slide_path = unpacked_dir / "ppt" / "slides" / slide_file
     slide_xml = slide_path.read_text(encoding="utf-8")
 
+    if verbose:
+        print(f"  [INJECT] Processing slide: {slide_file}")
+        print(f"    Source content: title={repr(source_slide.get('title', '')[:30])}, "
+              f"subtitle={repr(source_slide.get('subtitle', '')[:20])}, "
+              f"body_items={len(source_slide.get('body', []))}")
+
     # Infer background type from existing slide background
     use_dark = _slide_has_dark_bg(slide_xml, template_colors)
     title_color = template_colors["text_on_dark"] if use_dark else template_colors["primary"]
     body_color  = template_colors["text_on_dark"] if use_dark else template_colors["text_on_light"]
+
+    if verbose:
+        print(f"    Colors: title={title_color}, body={body_color}, dark_bg={use_dark}")
 
     # Font faces from theme (empty string = don't set, inherit from layout/master)
     title_latin_font = template_fonts.get("major_latin", "")
@@ -1999,42 +3285,19 @@ def _inject_content_into_slide(
     # body_rich carries per-run formatting: [{text, bold, italic, size, color}, ...]
     body_rich: List[dict] = source_slide.get("body_rich", [])
 
-    modified = slide_xml
-
-    # ── Title ─────────────────────────────────────────────────────────────────
-    # If title is empty but body has content, use body[0] as title
-    effective_title = title
-    body_index_offset = 0  # How many items to skip from body when injecting content
-    if not title and body:
-        effective_title = body[0]
-        body_index_offset = 1  # Skip body[0] since it's now the title
-
-    if effective_title:
-        modified_after = _replace_placeholder_text(
-            modified, ["title", "ctrTitle"], effective_title,
-            color=title_color,
-            latin_font=title_latin_font,
-            ea_font=title_ea_font,
-        )
-        modified = modified_after
-
-    # ── Subtitle ──────────────────────────────────────────────────────────────
-    if subtitle:
-        modified = _replace_placeholder_text(
-            modified, ["subTitle"], subtitle,
-            color=body_color,
-            latin_font=body_latin_font,
-            ea_font=body_ea_font,
-        )
-
-    # ── Body / content placeholder ────────────────────────────────────────────
+    # ── Build body XML ─────────────────────────────────────────────────────────
+    body_xml = ""
     if body:
+        body_index_offset = 0
+        effective_title = title
+        if not title and body:
+            effective_title = body[0]
+            body_index_offset = 1
+
         if source_slide.get("type") == "title":
             body_to_use = body[1:] if subtitle else body
-            # Trim rich list to match
             rich_to_use = body_rich[1:] if (subtitle and body_rich) else body_rich
         else:
-            # Apply offset when title was taken from body[0]
             body_to_use = body[body_index_offset:]
             rich_to_use = body_rich[body_index_offset:] if body_rich else []
 
@@ -2047,27 +3310,156 @@ def _inject_content_into_slide(
                 ea_font=body_ea_font,
                 layout_ph_styles=layout_ph_styles,
             )
-            modified = _replace_placeholder_content(modified, ["body", "obj"], body_xml)
+            if verbose:
+                print(f"    Built body XML with {len(body_to_use)} items")
+
+    # ── Try ET-based injection first (more reliable) ─────────────────────────
+    modified, et_title_ok, et_subtitle_ok, et_body_ok = _inject_content_using_et(
+        slide_xml, title, subtitle, body_xml,
+        title_color, body_color,
+        title_latin_font, title_ea_font,
+        body_latin_font, body_ea_font,
+        verbose,
+    )
+
+    if et_title_ok and et_subtitle_ok and (not body_xml or et_body_ok):
+        if verbose:
+            print(f"  [INJECT] ET injection successful: title={et_title_ok}, subtitle={et_subtitle_ok}, body={et_body_ok}")
+        slide_path.write_text(modified, encoding="utf-8")
+        return
+
+    if verbose:
+        print(f"  [INJECT] ET injection incomplete, falling back to regex")
+
+    # ── Fallback: regex-based injection ──────────────────────────────────────
+    modified = slide_xml
+
+    # If title is empty but body has content, use body[0] as title
+    effective_title = title
+    body_index_offset = 0  # How many items to skip from body when injecting content
+    if not title and body:
+        effective_title = body[0]
+        body_index_offset = 1  # Skip body[0] since it's now the title
+
+    if effective_title:
+        modified_after, injected = _replace_placeholder_text_with_log(
+            modified, ["title", "ctrTitle"], effective_title,
+            color=title_color,
+            latin_font=title_latin_font,
+            ea_font=title_ea_font,
+            verbose=verbose,
+            label="title",
+        )
+        modified = modified_after
+        if injected and not et_title_ok:
+            et_title_ok = True
+
+    if subtitle:
+        modified, injected = _replace_placeholder_text_with_log(
+            modified, ["subTitle"], subtitle,
+            color=body_color,
+            latin_font=body_latin_font,
+            ea_font=body_ea_font,
+            verbose=verbose,
+            label="subtitle",
+        )
+        if injected and not et_subtitle_ok:
+            et_subtitle_ok = True
+
+    if body_xml:
+        modified, injected = _replace_placeholder_content_with_log(
+            modified, ["body", "obj"], body_xml, verbose=verbose, label="body"
+        )
+        if injected and not et_body_ok:
+            et_body_ok = True
 
     # ── Fallback: if the slide still looks empty, try any remaining placeholder ─
     # This handles edge cases where:
     # (a) A title-only slide with title that went into a layout lacking "title" ph type
     # (b) body content that couldn't find body/obj ph — try injecting into first
     #     available text placeholder
-    if title and modified == slide_xml:
+    if effective_title and modified == slide_xml:
         # Title didn't get placed; try any remaining placeholder types
         for fallback_types in (["body", "obj"], ["subTitle"], ["pic"]):
-            result = _replace_placeholder_text(
-                modified, fallback_types, title,
+            result, injected = _replace_placeholder_text_with_log(
+                modified, fallback_types, effective_title,
                 color=title_color,
                 latin_font=title_latin_font,
                 ea_font=title_ea_font,
+                verbose=verbose,
+                label=f"title-fallback-{fallback_types[0]}",
             )
-            if result != modified:
+            if injected:
                 modified = result
+                if verbose:
+                    print(f"    [FALLBACK] Injected title into {fallback_types} placeholder")
                 break
 
+    # Summary log
+    if verbose:
+        content_was_injected = (modified != slide_xml)
+        print(f"  [INJECT] Summary: {'INJECTED' if content_was_injected else 'NO CHANGE'}, "
+              f"title={et_title_ok or injected}, body={et_body_ok}")
+
     slide_path.write_text(modified, encoding="utf-8")
+
+
+def _replace_placeholder_text_with_log(
+    slide_xml: str,
+    ph_types: List[str],
+    new_text: str,
+    color: Optional[str] = None,
+    bold: bool = False,
+    italic: bool = False,
+    size: Optional[int] = None,
+    latin_font: str = "",
+    ea_font: str = "",
+    verbose: bool = False,
+    label: str = "",
+) -> Tuple[str, bool]:
+    """Replace text content in a placeholder with logging. Returns (modified_xml, was_injected)."""
+    if verbose:
+        print(f"    [REGEX] Trying to inject {label}: {repr(new_text[:30])}...")
+
+    original_xml = slide_xml
+    modified = _replace_placeholder_text(
+        slide_xml, ph_types, new_text,
+        color=color, bold=bold, italic=italic, size=size,
+        latin_font=latin_font, ea_font=ea_font,
+    )
+
+    was_injected = modified != slide_xml
+    if verbose:
+        if was_injected:
+            print(f"    [REGEX] ✓ Injected {label}")
+        else:
+            print(f"    [REGEX] ✗ Failed to inject {label} (no matching placeholder)")
+
+    return modified, was_injected
+
+
+def _replace_placeholder_content_with_log(
+    slide_xml: str,
+    ph_types: List[str],
+    new_content_xml: str,
+    verbose: bool = False,
+    label: str = "",
+) -> Tuple[str, bool]:
+    """Replace body content in a placeholder with logging. Returns (modified_xml, was_injected)."""
+    if verbose:
+        print(f"    [REGEX] Trying to inject {label} body content...")
+
+    original_xml = slide_xml
+    modified = _replace_placeholder_content(slide_xml, ph_types, new_content_xml)
+
+    was_injected = modified != slide_xml
+    if verbose:
+        if was_injected:
+            print(f"    [REGEX] ✓ Injected {label} body content")
+        else:
+            print(f"    [REGEX] ✗ Failed to inject {label} body (no matching placeholder)")
+
+    return modified, was_injected
 
 
 def _slide_has_dark_bg(slide_xml: str, template_colors: Dict[str, str]) -> bool:
@@ -2599,6 +3991,9 @@ def _build_new_slides(
     source_slide_file_map: Dict[int, str],
     verbose: bool,
     skip_animations: bool = False,
+    beautify: bool = False,
+    template_theme: Optional[dict] = None,
+    dark_mode: bool = False,
 ) -> List[Tuple[str, str]]:
     """Create all new slides by duplicating template slides and injecting content."""
     # Build lookup including auto-generated TOC slides (source_index=0)
@@ -2613,6 +4008,9 @@ def _build_new_slides(
     layout_lookup = {l["layout_file"]: l for l in template_layouts}
     new_slides = []
     auto_toc_processed = False
+    # Track layout variant usage for visual variety
+    layout_streak: list = []
+    slide_index = 0
 
     for source_slide in source_slides:
         idx = source_slide.get("index", 0)
@@ -2640,7 +4038,23 @@ def _build_new_slides(
                         template_colors, template_fonts, layout_ph_styles,
                         verbose,
                     )
-                    
+
+                    # Apply deep beautification to TOC slides too
+                    if beautify and template_theme:
+                        toc_slide_path = unpacked_dir / "ppt" / "slides" / new_slide_file
+                        _beautify_slide_with_template_theme(
+                            slide_path=toc_slide_path,
+                            theme=template_theme,
+                            slide_type="content",
+                            body_items=toc_content.get("body", []),
+                            layout_streak=layout_streak,
+                            slide_index=slide_index,
+                            dark_mode=dark_mode,
+                            restructure=True,
+                            verbose=verbose,
+                        )
+                        slide_index += 1
+
                     if verbose:
                         print(f"  [AUTO-TOC] Created {new_slide_file} with auto-generated table of contents")
                     
@@ -2688,8 +4102,26 @@ def _build_new_slides(
         slide_path = unpacked_dir / "ppt" / "slides" / new_slide_file
         _apply_template_colors_to_slide(slide_path, template_colors, verbose)
 
-        # Apply AI beautification (title truncation, bullet merging, spacing)
-        beautify_notes = _beautify_slide_layout(slide_path, verbose)
+        # Apply deep beautification (full pipeline: backgrounds, colors, fonts, layout variants, images, tables)
+        if beautify and template_theme:
+            body_items = source_slide.get("body", [])
+            slide_type = source_slide.get("type", "content")
+            beautify_notes = _beautify_slide_with_template_theme(
+                slide_path=slide_path,
+                theme=template_theme,
+                slide_type=slide_type,
+                body_items=body_items,
+                layout_streak=layout_streak,
+                slide_index=slide_index,
+                dark_mode=dark_mode,
+                restructure=True,
+                verbose=verbose,
+            )
+            slide_index += 1
+        else:
+            # Fallback: basic layout beautification only
+            beautify_notes = _beautify_slide_layout(slide_path, verbose)
+            slide_index += 1
 
         # Migrate animations from source slide (with enhanced ID mapping)
         if src_file and not skip_animations:
@@ -2784,7 +4216,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--beautify-theme",
         metavar="THEME",
-        help="Theme for beautification pass (executive/tech/creative/warm/minimal/bold/nature/ocean/elegant/modern/sunset/forest). Default: auto-detect from source",
+        help="Theme design system for beautification (executive/tech/creative/warm/minimal/bold/nature/ocean/elegant/modern/sunset/forest). "
+             "Colors come from template; this sets fonts/sizes/layout style. Default: minimal",
+    )
+    parser.add_argument(
+        "--dark-mode",
+        action="store_true",
+        help="Apply dark background to title/section slides during beautification",
     )
     args = parser.parse_args()
 
@@ -2801,4 +4239,5 @@ if __name__ == "__main__":
         interactive=args.interactive,
         beautify=args.beautify,
         beautify_theme=args.beautify_theme,
+        dark_mode=args.dark_mode,
     )

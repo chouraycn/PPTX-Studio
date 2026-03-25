@@ -16,8 +16,8 @@ Handle all .pptx tasks — create from scratch, edit existing files, apply templ
 ```
 User provides TWO .pptx files?
   → Mode 1: AI 驱动的模板套用
-    五阶段流程：① AI深度理解内容 → ② AI优化纠错 → ③ AI智能布局设计 → ④ 脚本执行 → ⑤ AI生成备注
-    ℹ️  动画时间轴结构自动迁移（形状ID重新分配后需在PPT中手动重绑），备注完整保留。
+    六阶段流程：① AI深度理解内容 → ② AI优化纠错 → ③ AI智能布局设计 → ④ 脚本执行 → ⑤ AI深度美化（10种布局变体） → ⑥ AI生成备注
+    ℹ️  `--beautify` flag 启用深度美化（渐变背景、图片增强、表格美化）；动画时间轴结构自动迁移（形状ID重新分配后需在PPT中手动重绑），备注完整保留。
 
 User provides ONE .pptx file + says "beautify / redesign / make it look better"?
   → Mode 2: Style Beautify
@@ -49,7 +49,7 @@ Still unclear?
 
 | User says... | Mode |
 |--------------|------|
-| 给两个pptx，套/换/应用模板 | Mode 1: AI 驱动的模板套用（AI理解→AI优化→AI设计→脚本执行→AI备注） |
+| 给两个pptx，套/换/应用模板 | Mode 1: AI 驱动的模板套用（AI理解→AI优化→AI设计→脚本执行→AI美化→AI备注） |
 | 美化、优化、让它更好看 | Mode 2: Style Beautify |
 | 编辑、更新、修改内容（单点修改） | patch_slide.py（快速路径） |
 | 编辑、更新、修改内容（结构修改） | Editing Workflow（解包→编辑XML→打包） |
@@ -198,7 +198,7 @@ Two powerful transformation modes — both now include **AI-powered stages** and
 
 | Mode | Description |
 |------|-------------|
-| **Mode 1: Template Apply** | 五阶段 AI 驱动：① AI深度理解 → ② AI优化纠错补充 → ③ AI智能布局设计 → ④ 脚本执行模板套用 → ⑤ AI生成备注 |
+| **Mode 1: Template Apply** | 六阶段 AI 驱动：① AI深度理解 → ② AI优化纠错补充 → ③ AI智能布局设计 → ④ 脚本执行模板套用 → ⑤ AI深度美化（10种布局变体、渐变背景、图片增强、表格美化）→ ⑥ AI生成备注 |
 | **Style Beautify** | Redesign visual style with **12 themes**, **10 layout variants**, **smart image enhancement**, and **auto icon insertion** |
 
 ### Enhanced Visual Features (New)
@@ -247,6 +247,7 @@ Transform scripts quick reference:
 | Extract content from PPT | `python scripts/extract_content.py source.pptx` |
 | Analyze template layouts | `python scripts/thumbnail.py template.pptx` |
 | Apply template to PPT | `python scripts/apply_template.py source.pptx template.pptx output.pptx` |
+| Apply template + deep beautify | `python scripts/apply_template.py source.pptx template.pptx output.pptx --beautify` |
 | Beautify PPT | `python scripts/beautify_ppt.py source.pptx output.pptx [--theme THEME]` |
 | Generate speaker notes | `python scripts/generate_notes.py source.pptx output.pptx [--mode MODE]` |
 | QA check output file | `python scripts/qa_check.py output.pptx` |
@@ -270,15 +271,16 @@ Transform scripts quick reference:
 
 ### 传统方式 vs AI 驱动方式
 
-| 传统方式（脚本复制） | AI 驱动方式（Mode 1） |
-|-------------------|---------------------|
+| 传统方式（脚本复制） | AI 驱动方式（Mode 1 + `--beautify`） |
+|-------------------|-------------------------------------|
 | 提取文字后直接复制到占位符 | AI 理解每页的语义和逻辑关系 |
 | 随机或固定分配布局 | AI 根据内容类型选择最佳布局 |
 | 只迁移现有文本 | AI 自动纠错、完善、补充内容 |
+| 无视觉美化能力 | 10种布局变体、渐变背景、图片增强、表格美化 |
 | 无备注生成能力 | AI 生成洞察性演讲备注 |
 | 排版规则固定 | AI 根据内容密度动态调整排版 |
 
-### Overview — 五阶段 AI 流程
+### Overview — 六阶段 AI 流程（`--beautify` 启用时）
 
 ```
 阶段 0: AI 内容深度理解
@@ -288,8 +290,15 @@ Transform scripts quick reference:
 阶段 2: AI 智能布局设计
   ↓ AI 判断每页类型，选择最佳模板布局，不是复制而是重新设计
 阶段 3: 执行模板套用
-  ↓ 脚本执行 AI 决策的映射方案
-阶段 4: AI 备注生成
+  ↓ 脚本执行 AI 决策的映射方案（保留模板配色/字体）
+阶段 4: AI 深度美化（新增）
+  ↓ 内嵌 beautify_ppt 完整管线：
+    - 10 种布局变体（双色调、编号圆圈、统计高亮、卡片网格、时间轴等）
+    - 模板色彩体系保留 + 字体优化
+    - 渐变背景、图片增强（圆角/阴影/边框）
+    - 表格美化（斑马纹、表头着色、统一边框）
+    - 段落行距优化（1.2 倍）
+阶段 5: AI 备注生成
   ↓ AI 生成核心要点 + 演讲提示 + 过渡引导
 
 输出：一个经过 AI 深度加工的，专业级的 PPT
@@ -465,18 +474,24 @@ python scripts/thumbnail.py source.pptx source_thumb/
 # 基于 AI 决策的布局映射，执行模板套用
 python scripts/apply_template.py source.pptx template.pptx output.pptx
 
-# 进阶：完整美化（重新设计布局 + 配色 + 字体 + 表格）
+# 完整模式（推荐）：模板套用 + AI 深度美化
+# 美化内容：10种布局变体、渐变背景、图片增强、表格美化、段落优化
+# 模板的配色和字体会被完整保留
 python scripts/apply_template.py source.pptx template.pptx output.pptx --beautify
 
-# 指定美化主题
+# 指定美化设计系统（字体/字号/渐变风格），颜色始终来自模板
 python scripts/apply_template.py source.pptx template.pptx output.pptx --beautify --beautify-theme tech
+
+# 深色模式：标题页/章节页使用深色背景
+python scripts/apply_template.py source.pptx template.pptx output.pptx --beautify --dark-mode
 ```
 
 脚本自动完成：
 1. 提取源 PPT 文字、图片、格式
 2. 按 AI 决策映射布局
 3. 注入内容，使用模板配色/字体
-4. 自动替换形状、表格、SmartArt 颜色
+4. `--beautify` 时：内嵌完整美化管线（见阶段 4）
+5. 自动替换形状、表格、SmartArt 颜色
 5. 迁移动画时间轴结构和 Speaker Notes
 6. 打包输出
 
@@ -1101,11 +1116,16 @@ Applies a template's visual style to a source PPT's content.
 python scripts/apply_template.py source.pptx template.pptx output.pptx [options]
 
 Options:
-  --mapping FILE     JSON file with manual slide mapping (overrides auto-mapping)
-  --dry-run          Print mapping plan only — no output file written
-  --save-mapping F   Save auto-generated mapping to JSON (pair with --dry-run)
-  --no-notes         Do NOT preserve speaker notes (default: notes are kept)
-  --verbose, -v      Show detailed mapping decisions and layout analysis
+  --mapping FILE       JSON file with manual slide mapping (overrides auto-mapping)
+  --dry-run            Print mapping plan only — no output file written
+  --save-mapping F     Save auto-generated mapping to JSON (pair with --dry-run)
+  --no-notes           Do NOT preserve speaker notes (default: notes are kept)
+  --skip-animations    Skip animation migration
+  --verbose, -v        Show detailed mapping decisions and layout analysis
+  --beautify           Apply deep beautification pipeline (10 layout variants, gradients, image enhancement, table styling)
+  --beautify-theme T   Beautify design system: executive/tech/creative/warm/minimal/bold/nature/ocean/elegant/modern/sunset/forest
+                        (colors come from template; this sets fonts/sizes/gradient style)
+  --dark-mode          Apply dark background to title/section slides during beautification
 ```
 
 **Recommended workflow:**
@@ -1119,8 +1139,8 @@ python scripts/apply_template.py source.pptx template.pptx out.pptx --dry-run --
 # Edit mapping.json to fix slide assignments
 python scripts/apply_template.py source.pptx template.pptx out.pptx --mapping mapping.json
 
-# Step 3: Execute
-python scripts/apply_template.py source.pptx template.pptx out.pptx
+# Step 3: Execute with deep beautification (recommended)
+python scripts/apply_template.py source.pptx template.pptx out.pptx --beautify --beautify-theme modern
 ```
 
 **What gets preserved automatically:**
@@ -1129,7 +1149,8 @@ python scripts/apply_template.py source.pptx template.pptx out.pptx
 - ✅ **Animations**: Timing structure (`<p:timing>`) preserved (shape IDs remapped, may need re-binding in PowerPoint)
 - ✅ **Hyperlinks**: All text-based hyperlinks are migrated automatically using `hyperlink_migration.py`
 - ✅ **Images**: Extracted and re-injected into template layouts
-- ✅ **Tables**: Basic table structure preserved (use `beautify_ppt.py` for enhanced styling)
+- ✅ **Tables**: Basic table structure preserved
+- ✅ **Deep Beautification** (with `--beautify`): 10 layout variants, gradient backgrounds, image enhancement, table zebra striping, paragraph spacing — template colors/fonts preserved throughout
 
 **What requires manual handling:**
 
