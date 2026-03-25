@@ -5,13 +5,13 @@ Labels each thumbnail with its XML filename (e.g., slide1.xml).
 Hidden slides are shown with a placeholder pattern.
 
 Usage:
-    python thumbnail.py input.pptx [output_prefix] [--cols N]
+    python scripts/thumbnail.py input.pptx [output_prefix] [--cols N]
 
 Examples:
-    python thumbnail.py presentation.pptx
+    python scripts/thumbnail.py presentation.pptx
     # Creates: thumbnails.jpg
 
-    python thumbnail.py template.pptx grid --cols 4
+    python scripts/thumbnail.py template.pptx grid --cols 4
     # Creates: grid.jpg (or grid-1.jpg, grid-2.jpg for large decks)
 """
 
@@ -21,6 +21,12 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+
+import sys
+from pathlib import Path
+
+# Allow running as `python scripts/thumbnail.py` from the project root
+sys.path.insert(0, str(Path(__file__).parent))
 
 import defusedxml.minidom
 from office.soffice import get_soffice_env

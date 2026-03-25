@@ -402,29 +402,24 @@ Keep it under 100 words. No markdown. Plain text only."""
 
 def write_notes_to_slide(slide, notes_text: str):
     """将备注文字写入幻灯片的 notes placeholder。"""
+    from pptx.oxml.ns import qn
+    from lxml import etree
+
     if not slide.has_notes_slide:
         # 访问一次会自动创建 notes slide
         _ = slide.notes_slide
 
     tf = slide.notes_slide.notes_text_frame
-    # 清空现有内容
-    for para in tf.paragraphs:
-        for run in para.runs:
-            run.text = ""
+    txBody = tf._txBody
 
-    # 写入新内容（逐行）
+    # 彻底删除所有旧 <a:p> 节点，避免多次执行后残留空段落
+    for old_p in txBody.findall(qn("a:p")):
+        txBody.remove(old_p)
+
+    # 逐行重新写入
     lines = notes_text.split("\n")
-    # 第一段
-    p = tf.paragraphs[0]
-    p.text = lines[0] if lines else ""
-
-    # 后续段落
-    from pptx.oxml.ns import qn
-    from lxml import etree
-
-    for line in lines[1:]:
-        # 新建 <a:p> 并追加
-        new_p = etree.SubElement(tf._txBody, qn("a:p"))
+    for line in lines:
+        new_p = etree.SubElement(txBody, qn("a:p"))
         new_r = etree.SubElement(new_p, qn("a:r"))
         new_t = etree.SubElement(new_r, qn("a:t"))
         new_t.text = line

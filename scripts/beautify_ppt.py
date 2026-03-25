@@ -655,8 +655,6 @@ def _update_text_colors(xml: str, theme: dict, use_dark: bool) -> str:
         return rpr
 
     # Update all run properties that have explicit colors
-    xml = re.sub(r'<a:rPr[^>]*/>', xml, xml)  # noop to warm up
-    # This is a simplified approach - in real scenarios we'd parse XML properly
     # Replace obvious old colors that are too far from theme
     bad_colors = ["FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
                   "808080", "C0C0C0", "000080", "008000", "800000"]

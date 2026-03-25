@@ -1,16 +1,16 @@
 """Add a new slide to an unpacked PPTX directory.
 
-Usage: python add_slide.py <unpacked_dir> <source>
+Usage: python scripts/add_slide.py <unpacked_dir> <source>
 
 The source can be:
   - A slide file (e.g., slide2.xml) - duplicates the slide
   - A layout file (e.g., slideLayout2.xml) - creates from layout
 
 Examples:
-    python add_slide.py unpacked/ slide2.xml
+    python scripts/add_slide.py unpacked/ slide2.xml
     # Duplicates slide2, creates slide5.xml
 
-    python add_slide.py unpacked/ slideLayout2.xml
+    python scripts/add_slide.py unpacked/ slideLayout2.xml
     # Creates slide5.xml from slideLayout2.xml
 
 To see available layouts: ls unpacked/ppt/slideLayouts/

@@ -1,6 +1,6 @@
 ---
 name: pptx-studio
-description: "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file; editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Also use when: (1) the user wants to apply or swap a template style — phrases like 'apply template', 'use this template', 'fit into template', 'change my PPT style', 'switch template', 'replace template', 'change the template', 'switch the template', 'use a different template', '套用模板', '换模板', '更换模板', '换个模板', '替换模板', '把PPT套入模板', '套入指定模板', '模板转换', '换一套模板', '更改模板', '切换模板'; (2) the user wants to beautify or redesign a PPT — phrases like 'beautify', 'redesign', 'make it look better', 'improve design', 'modernize slides', '美化PPT', '优化设计', '让PPT更好看', '重新设计风格', '改造PPT外观', '美化幻灯片'; (3) the user wants to generate or add speaker notes — phrases like 'add speaker notes', 'generate notes', 'write notes for presenter', 'add talking points', 'create presentation notes', 'notes for each slide', '加备注', '生成演讲者备注', '写备注', '添加演讲提示', '为每页写备注', '自动生成备注', '演讲者视图备注'. Trigger whenever the user mentions 'deck', 'slides', 'presentation', or references a .pptx filename."
+description: "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file; editing, modifying, or updating existing presentations; combining or splitting slide files; merging multiple PPTX files into one; working with templates, layouts, speaker notes, or comments. Also use when: (1) the user wants to apply or swap a template style — phrases like 'apply template', 'use this template', 'fit into template', 'change my PPT style', 'switch template', 'replace template', 'change the template', 'switch the template', 'use a different template', '套用模板', '换模板', '更换模板', '换个模板', '替换模板', '把PPT套入模板', '套入指定模板', '模板转换', '换一套模板', '更改模板', '切换模板'; (2) the user wants to beautify or redesign a PPT — phrases like 'beautify', 'redesign', 'make it look better', 'improve design', 'modernize slides', '美化PPT', '优化设计', '让PPT更好看', '重新设计风格', '改造PPT外观', '美化幻灯片'; (3) the user wants to generate or add speaker notes — phrases like 'add speaker notes', 'generate notes', 'write notes for presenter', 'add talking points', 'create presentation notes', 'notes for each slide', '加备注', '生成演讲者备注', '写备注', '添加演讲提示', '为每页写备注', '自动生成备注', '演讲者视图备注'; (4) the user wants to merge or combine multiple PPTX files — phrases like 'merge pptx', 'combine presentations', 'join slides', 'concatenate pptx', '合并PPT', '合并幻灯片', '拼接PPT', '把多个PPT合并', '合在一起', '将两个PPT合成一个'. Trigger whenever the user mentions 'deck', 'slides', 'presentation', or references a .pptx filename."
 license: Proprietary. LICENSE.txt has complete terms
 ---
 
@@ -33,11 +33,14 @@ User provides ONE .pptx file + says "read / extract / summarize / what's in this
 User provides ONE .pptx file + says "add speaker notes / generate notes / write notes for me / 加备注 / 生成演讲者备注 / 写备注"?
   → Speaker Notes Workflow
 
+User provides TWO OR MORE .pptx files + says "merge / combine / join / concatenate / 合并 / 拼接 / 合在一起"?
+  → Mode 6: Merge PPT
+
 User provides NO file + wants a new presentation?
   → Creating from Scratch (pptxgenjs)
 
 Still unclear?
-  → Ask: "您想对PPT做什么？套用模板、美化风格、编辑内容，还是从头创建？"
+  → Ask: "您想对PPT做什么？套用模板、美化风格、编辑内容、合并文件，还是从头创建？"
 ```
 
 **Quick decision table:**
@@ -50,6 +53,7 @@ Still unclear?
 | 修改内容、调整文字、增减页 | patch_slide（单点文字）或 Editing Workflow（结构性修改） |
 | 读取、提取、总结内容 | Reading Content |
 | 加备注、写演讲提示、生成 Speaker Notes | Speaker Notes Workflow |
+| 合并多个PPT、拼接、合在一起 | Mode 6: Merge PPT |
 | 做一个新PPT | Creating from Scratch |
 
 ---
@@ -64,6 +68,7 @@ Still unclear?
 | Apply template to PPT | Mode 1 below |
 | Beautify PPT style | Mode 2 below |
 | Generate speaker notes | Speaker Notes Workflow below |
+| Merge multiple PPTXs | Mode 6: Merge PPT below |
 | QA check output file | `python scripts/qa_check.py output.pptx` |
 
 ---
@@ -347,6 +352,8 @@ Based on the content topic, select a theme:
 python scripts/beautify_ppt.py source.pptx output.pptx --theme tech
 ```
 
+> **判断是否加 `--no-restructure`：** 源文件已有精心排版（SmartArt、多列、自定义占位符）或只想换配色/字体而不改版式时，加上此 flag；纯文字简单布局时不加（默认自动丰富）。详见 [beautify_ppt.py 说明](#beautify_pptpy)。
+
 Flags:
 - `--theme NAME` — theme name from table above (default: auto-detect from content)
 - `--keep-images` — preserve original images (default: True)
@@ -434,10 +441,10 @@ Font: Georgia + Calibri
 ### Warm — 温暖陶土（教育/社区/wellness）
 ```
 Primary: #B85042 (terracotta)
-Secondary: #ECE2D0 (sand)
-Accent: #84B59F (sage)
+Secondary: #84B59F (sage)
+Accent: #ECE2D0 (sand)
 Background: #FFFDF9 / #F5F0E8
-Font: Palatino + Calibri
+Font: Palatino Linotype + Calibri
 ```
 
 ### Minimal — 极简炭灰（学术/研究/简洁商务）
@@ -446,7 +453,7 @@ Primary: #36454F (charcoal)
 Secondary: #F2F2F2 (off-white)
 Accent: #212121 (black)
 Background: #FFFFFF
-Font: Arial Black + Arial
+Font: Calibri + Calibri
 ```
 
 ### Bold — 大胆酒红（销售/产品发布/强视觉）
@@ -455,7 +462,7 @@ Primary: #990011 (cherry)
 Secondary: #2F3C7E (navy)
 Accent: #FCF6F5 (near white)
 Background: #1A1A2E / #FFFFFF
-Font: Impact + Arial
+Font: Arial Black + Arial
 ```
 
 ### Nature — 自然森绿（环保/农业/可持续）
@@ -494,20 +501,40 @@ Output format:
   "slides": [
     {
       "index": 1,
+      "slide_file": "slide1.xml",
       "type": "title",  // auto-detected: title|section|content|image|quote|end
       "title": "...",
+      "subtitle": "...",
       "body": ["bullet 1", "bullet 2"],
+      "body_rich": [{"text": "...", "bold": true, "size": 28}],
       "notes": "...",
       "has_images": false,
-      "image_paths": [],
+      "image_count": 0,
       "has_charts": false,
-      "layout_hint": "title_slide"
+      "has_tables": false,
+      "table_data": [],
+      "layout_file": "slideLayout2.xml",
+      "layout_name": "Title Slide",
+      "layout_hint": "title_slide",
+      "shape_count": 3,
+      "background_color": ""
     }
   ],
   "total_slides": 12,
-  "topic_keywords": ["AI", "strategy", "2024"]
+  "topic_keywords": ["AI", "strategy", "2024"],
+  "detected_theme": "minimal"
 }
 ```
+
+> **字段说明补充：**
+> - `slide_file` — 幻灯片 XML 文件名（如 `slide1.xml`），可直接用于 `patch_slide.py` 或 `add_slide.py` 定位文件
+> - `layout_file` — 关联的布局文件名（如 `slideLayout2.xml`），可传给 `add_slide.py` 的 source 参数
+> - `layout_hint` — 建议模板布局类型（`title_slide` / `content_slide` / `two_column` 等），供 `apply_template.py` 自动映射使用
+> - `body_rich` — 带层级结构的正文（含 bold、italic、size、color 格式信息）
+> - `shape_count` — 当前页的形状（`<p:sp>`）总数，可用于判断页面复杂度
+> - `background_color` — 幻灯片背景色十六进制值（如 `1A1A2E`），无背景色时为空字符串
+>
+> 处理有表格、需要按文件名定位幻灯片或精确版式匹配的场景时，请直接读取完整 JSON 输出。
 
 ### apply_template.py
 
@@ -520,8 +547,8 @@ Options:
   --mapping FILE     JSON file with manual slide mapping (overrides auto-mapping)
   --dry-run          Print mapping plan only — no output file written
   --save-mapping F   Save auto-generated mapping to JSON (pair with --dry-run)
-  --keep-notes       Preserve speaker notes (default: True)
-  --verbose          Show detailed mapping decisions
+  --no-notes         Do NOT preserve speaker notes (default: notes are kept)
+  --verbose, -v      Show detailed mapping decisions and layout analysis
 ```
 
 **Recommended workflow:**
@@ -586,8 +613,9 @@ Options:
   --theme NAME         Theme name (default: auto-detect)
   --keep-images        Preserve original images (default: True)
   --font-pair PAIR     Font pair: georgia-calibri, arial-calibri, etc.
-  --dark-mode          Use dark background variant
+  --dark-mode          Force dark background on all slides
   --no-restructure     Skip layout restructuring (colors/fonts only)
+  --verbose, -v        Show detailed processing information
 ```
 
 **When to use `--no-restructure`:**
@@ -755,7 +783,7 @@ For each slide, list issues or areas of concern, even if minor.
 Convert presentations to individual slide images for visual inspection:
 
 ```bash
-python scripts/office/soffice.py --headless --convert-to pdf output.pptx
+soffice --headless --convert-to pdf output.pptx
 pdftoppm -jpeg -r 150 output.pdf slide
 ```
 
@@ -774,13 +802,133 @@ pdftoppm -jpeg -r 150 -f N -l N output.pdf slide-fixed
 - `pip install "markitdown[pptx]"` — text extraction
 - `pip install defusedxml Pillow python-pptx` — XML handling, thumbnails, PPTX manipulation
 - `npm install -g pptxgenjs react react-dom react-icons sharp` — creating from scratch
-- LibreOffice (`soffice`) — PDF/image conversion (auto-configured via `scripts/office/soffice.py`)
+- LibreOffice (`soffice`) — PDF/image conversion (path auto-resolved via `scripts/office/soffice.py` helper; call `soffice` directly, not the helper script)
 - Poppler (`pdftoppm`) — PDF to images
 
 Install all Python deps:
 ```bash
 pip install "markitdown[pptx]" defusedxml Pillow python-pptx
 ```
+
+---
+
+## Mode 6: Merge PPT
+
+将两个或多个 PPTX 文件的幻灯片按顺序合并为一个输出文件。输出文件的尺寸以第一个文件为准。
+
+### 快速开始
+
+```bash
+# 最简用法：将 a.pptx 和 b.pptx 全部幻灯片合并（默认顺序 A1,A2,...,B1,B2,...）
+python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx
+
+# 合并三个文件
+python scripts/merge_pptx.py a.pptx b.pptx c.pptx -o merged.pptx
+```
+
+### 选取指定幻灯片（--slides）
+
+```bash
+# a.pptx 取第 1-5 页，b.pptx 取第 2、3、7 页
+python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx --slides "1-5" "2,3,7"
+
+# 所有文件都只取第 1-3 页（单个 range 全局生效）
+python scripts/merge_pptx.py a.pptx b.pptx c.pptx -o merged.pptx --slides "1-3"
+```
+
+Range 格式：`"1-5"`（连续）或 `"1,3,5"`（离散）或混合 `"1-3,7,9"`。页码从 **1** 开始。
+
+### 自定义排序合并（--order）⭐
+
+`--order` 让你按任意顺序交叉混排多个文件的页面，每个 token 格式为 `<文件序号>:<页码>`（均从 1 开始）。
+
+```bash
+# A1 → B1 → A2 → B2 → A3（交错穿插）
+python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx \
+    --order 1:1 2:1 1:2 2:2 1:3
+
+# 完全自定义：先 B2，再 A1，再 B1，最后 A3
+python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx \
+    --order 2:2 1:1 2:1 1:3
+
+# 三文件排序示例：C1, A2, B3, A1
+python scripts/merge_pptx.py a.pptx b.pptx c.pptx -o merged.pptx \
+    --order 3:1 1:2 2:3 1:1
+
+# 先 dry-run 确认排序对不对
+python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx \
+    --order 1:1 2:1 1:2 2:2 --dry-run
+```
+
+> **注意**：`--order` 与 `--slides` 互斥，使用 `--order` 时 `--slides` 会被忽略。每个 token 都可以重复使用同一页（例如 `1:1 1:1` 会输出 A1 两次）。
+
+### 其他选项
+
+```bash
+# 不复制演讲者备注
+python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx --ignore-notes
+
+# 预览合并计划（不写文件）
+python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx --dry-run
+```
+
+### 完整参数说明
+
+| 参数 | 说明 |
+|------|------|
+| `FILE ...` | 两个或更多 `.pptx` 输入文件（按顺序）|
+| `-o / --output` | 输出文件路径（必填）|
+| `--slides RANGE [RANGE ...]` | 每个文件的幻灯片范围；一个值全局生效，多个值按文件顺序匹配；`--order` 存在时忽略 |
+| `--order FILE:SLIDE [...]` | 自定义跨文件排序，每个 token 为 `<文件序号>:<页码>`（均 1-based），输出按此顺序排列 |
+| `--ignore-notes` | 不复制演讲者备注（默认：复制）|
+| `--dry-run` | 仅打印合并计划，不写出文件 |
+
+### 典型工作流
+
+**Step 1 — 确认每个文件的幻灯片数量**
+
+```bash
+python -m markitdown a.pptx | grep "^## Slide"
+python -m markitdown b.pptx | grep "^## Slide"
+```
+
+或用缩略图快速预览：
+
+```bash
+python scripts/thumbnail.py a.pptx
+python scripts/thumbnail.py b.pptx
+```
+
+**Step 2 — dry-run 确认合并计划**
+
+```bash
+python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx --dry-run
+# 输出示例：
+# [Dry run] Merging 2 files → merged.pptx
+#   a.pptx: slides [1, 2, 3] (3 slides)
+#   b.pptx: slides [1, 2, 3, 4, 5] (5 slides)
+# Total: 8 slides
+```
+
+**Step 3 — 正式合并**
+
+```bash
+python scripts/merge_pptx.py a.pptx b.pptx -o merged.pptx
+```
+
+**Step 4 — QA 验证**
+
+```bash
+python scripts/qa_check.py merged.pptx
+python -m markitdown merged.pptx
+```
+
+### 注意事项
+
+- 输出文件的**幻灯片尺寸**以第一个输入文件为准；若各文件尺寸不同，第二个文件起的幻灯片内容比例可能变形，建议预先统一尺寸。
+- **动画和切换效果**：幻灯片内的动画（`<p:timing>`）会被原样保留；但复制后绑定 ID 可能冲突，在 PowerPoint 中打开时部分动画可能需重新触发。
+- **嵌入媒体**（图片、音视频）：通过 python-pptx 关系层自动重新映射，通常无需手动处理。
+- 合并完成后建议在 PowerPoint 中打开验证，尤其是有复杂嵌入元素的文件。
 
 ---
 
@@ -828,6 +976,10 @@ OPENAI_API_KEY=sk-xxx python scripts/generate_notes.py deck.pptx out.pptx --back
 
 # 本地 Ollama 后端（需先启动 ollama serve）
 python scripts/generate_notes.py deck.pptx out.pptx --backend ollama --model llama3
+
+# 自定义 API 端点（兼容 OpenAI API 的本地服务）
+python scripts/generate_notes.py deck.pptx out.pptx --backend openai \
+    --api-key sk-xxx --base-url http://localhost:11434/v1
 ```
 
 ### 常用选项

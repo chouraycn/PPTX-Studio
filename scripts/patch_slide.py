@@ -6,7 +6,7 @@ Ideal for single-point fixes: correcting a title, updating a number, fixing a ty
 Design principle:
   - Destructive (overwrites) operations require --confirm or print a plan first
   - Non-destructive (dry-run) is the default — always shows what would change
-  - Max 10 replacements per run to prevent unintended mass edits
+  - Max 20 replacements per run to prevent unintended mass edits
 
 Usage:
     # Preview changes (default — safe, no file written)
