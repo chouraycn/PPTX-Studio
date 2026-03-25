@@ -43,7 +43,7 @@ import copy
 import re
 import sys
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Optional
 
 # python-pptx
 try:
@@ -53,6 +53,13 @@ try:
     from lxml import etree
 except ImportError:
     print("Error: python-pptx is required. Run: pip install python-pptx", file=sys.stderr)
+    sys.exit(1)
+
+# auto_resize module
+try:
+    from auto_resize import detect_slide_size, calculate_resize_strategy, resize_slide_xml, SlideSize
+except ImportError:
+    print("Error: auto_resize module not found. Ensure auto_resize.py is in the same directory", file=sys.stderr)
     sys.exit(1)
 
 
@@ -163,11 +170,19 @@ def merge(
     order_specs: list[str] | None = None,
     ignore_notes: bool = False,
     dry_run: bool = False,
+    resize_strategy: str = "smart",
+    target_size: Optional[str] = None,
+    resize_warnings: bool = False,
 ) -> str:
     """Merge input_files into output_file.
 
     When order_specs is provided (list of "<file_num>:<slide_num>" tokens),
     slides are emitted in that exact custom order; slides_specs is ignored.
+
+    Args:
+        resize_strategy: Resize strategy (smart/scale/stretch/crop)
+        target_size: Target slide size (16:9/4:3/16:10/auto)
+        resize_warnings: Show resize warnings
 
     Returns a human-readable summary string.
     """
@@ -249,11 +264,41 @@ def merge(
     # Summary
     lines = []
     total_slides = 0
-    for p, indices in zip(paths, resolved):
+    resize_lines = []
+
+    # Detect sizes and check if resize needed
+    source_sizes = [detect_slide_size(str(p)) for p in paths]
+    first_size = source_sizes[0]
+
+    # Determine target size
+    if target_size and target_size != "auto":
+        from auto_resize import parse_size_spec
+        target_width, target_height = parse_size_spec(target_size)
+        target_size_obj = SlideSize(target_width, target_height, target_size)
+    else:
+        target_size_obj = first_size
+
+    # Check if resize is needed
+    needs_resize = any(
+        s.aspect_ratio != target_size_obj.aspect_ratio for s in source_sizes
+    )
+
+    for p, indices, size in zip(paths, resolved, source_sizes):
         count = len(indices)
         total_slides += count
         slide_nums = [i + 1 for i in indices]
-        lines.append(f"  {p.name}: slides {slide_nums} ({count} slides)")
+        
+        line = f"  {p.name}: slides {slide_nums} ({count} slides)"
+        
+        if needs_resize and size.aspect_ratio != target_size_obj.aspect_ratio:
+            resize_info = calculate_resize_strategy(size, target_size_obj, resize_strategy)
+            line += f" [{size.aspect_ratio} → {target_size_obj.aspect_ratio}]"
+            
+            if resize_warnings:
+                for w in resize_info.warnings:
+                    resize_lines.append(f"    ⚠️  {p.name}: {w}")
+        
+        lines.append(line)
 
     summary = (
         f"Merging {len(paths)} files → {output_file}\n"
@@ -261,19 +306,42 @@ def merge(
         + f"\nTotal: {total_slides} slides"
     )
 
+    if needs_resize:
+        summary += f"\nResize strategy: {resize_strategy}"
+        if resize_warnings and resize_lines:
+            summary += "\nResize warnings:\n" + "\n".join(resize_lines)
+
     if dry_run:
         return f"[Dry run] {summary}"
 
-    # Build output presentation using first file's dimensions
+    # Build output presentation
     dest_prs = Presentation()
-    first_prs = presentations[0]
-    dest_prs.slide_width = first_prs.slide_width
-    dest_prs.slide_height = first_prs.slide_height
+    dest_prs.slide_width = target_size_obj.width
+    dest_prs.slide_height = target_size_obj.height
 
-    # Append slides
-    for prs, indices in zip(presentations, resolved):
+    # Append slides with resize if needed
+    for prs, indices, source_size in zip(presentations, resolved, source_sizes):
         for slide_el, notes_el in _iter_slides(prs, indices):
-            _append_slide(dest_prs, slide_el, notes_el, ignore_notes)
+            # Check if resize is needed for this source
+            if source_size.aspect_ratio != target_size_obj.aspect_ratio:
+                # Get slide XML as string
+                slide_xml_str = etree.tostring(slide_el, encoding="unicode")
+                
+                # Resize the slide
+                resized_xml_str = resize_slide_xml(
+                    slide_xml_str,
+                    source_size,
+                    target_size_obj,
+                    strategy=resize_strategy,
+                    verbose=False
+                )
+                
+                # Parse back to element
+                resized_el = etree.fromstring(resized_xml_str)
+                _append_slide(dest_prs, resized_el, notes_el, ignore_notes)
+            else:
+                # No resize needed, append directly
+                _append_slide(dest_prs, slide_el, notes_el, ignore_notes)
 
     # Write output
     out_path = Path(output_file)
@@ -339,6 +407,33 @@ if __name__ == "__main__":
         action="store_true",
         help="Print merge plan without writing output",
     )
+    parser.add_argument(
+        "--resize-strategy",
+        choices=["smart", "scale", "stretch", "crop"],
+        default="smart",
+        help=(
+            "Resize strategy when merging different slide sizes. "
+            "smart: AI layout optimization (default), "
+            "scale: maintain aspect ratio and center, "
+            "stretch: stretch to fill (may distort), "
+            "crop: crop to fill (may lose content)"
+        ),
+    )
+    parser.add_argument(
+        "--target-size",
+        choices=["16:9", "4:3", "16:10", "auto"],
+        default="auto",
+        help=(
+            "Target slide size for merged output. "
+            "auto: use first file's size (default), "
+            "16:9/4:3/16:10: force specific size"
+        ),
+    )
+    parser.add_argument(
+        "--resize-warnings",
+        action="store_true",
+        help="Show warnings about resize operations",
+    )
 
     args = parser.parse_args()
 
@@ -353,7 +448,11 @@ if __name__ == "__main__":
         order_specs=args.order,
         ignore_notes=args.ignore_notes,
         dry_run=args.dry_run,
+        resize_strategy=args.resize_strategy,
+        target_size=args.target_size,
+        resize_warnings=args.resize_warnings,
     )
+
     print(result)
 
     if result.startswith("Error"):

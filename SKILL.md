@@ -8,6 +8,8 @@ license: Proprietary. LICENSE.txt has complete terms
 
 Handle all .pptx tasks — create from scratch, edit existing files, apply templates, and beautify designs.
 
+📦 **Source Code**: https://github.com/chouraycn/PPTX-Studio
+
 ## Decision Flow
 
 **Start here every time.** Before doing anything, figure out which mode to use:
