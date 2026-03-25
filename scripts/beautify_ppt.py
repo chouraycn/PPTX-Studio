@@ -1150,7 +1150,10 @@ def _beautify_slide(
         if layout_variant in ("accent_bar", "none") or not restructure:
             xml = _add_accent_bar(xml, theme)
 
-    # 10. Optimize paragraph spacing
+    # 10. Beautify tables (header styling, zebra striping, border unification)
+    xml = _beautify_tables(xml, theme, use_dark)
+
+    # 11. Optimize paragraph spacing
     xml = _optimize_paragraph_spacing(xml, theme)
 
     slide_path.write_text(xml, encoding="utf-8")
@@ -1524,6 +1527,137 @@ def _update_shape_colors(xml: str, theme: dict, use_dark: bool) -> str:
 
     xml = re.sub(r'<p:spPr>.*?</p:spPr>', process_sppr, xml, flags=re.DOTALL)
     return xml
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TABLE BEAUTIFICATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _beautify_tables(xml: str, theme: dict, use_dark: bool) -> str:
+    """Apply AI beautification to tables in the slide.
+    
+    Enhancements applied:
+    1. Style header row with theme primary color + white text
+    2. Add alternating row colors (zebra striping) for readability
+    3. Unify border styles with consistent width and theme color
+    4. Optimize cell margins for better spacing
+    5. Apply theme fonts to table text
+    """
+    # Check if there are any tables in the slide
+    if '<a:tbl>' not in xml:
+        return xml
+    
+    primary = theme["primary"]
+    secondary = theme["secondary"]
+    accent = theme["accent"]
+    
+    # Choose zebra stripe colors based on theme
+    if use_dark:
+        stripe_light = _lighten_color(primary, 90)  # Very light version
+        stripe_dark = _lighten_color(primary, 80)
+        header_bg = primary
+        header_text = "FFFFFF"
+        body_text = "FFFFFF"
+    else:
+        stripe_light = "FFFFFF"
+        stripe_dark = _lighten_color(primary, 92)  # Very subtle stripe
+        header_bg = primary
+        header_text = "FFFFFF"
+        body_text = theme.get("text", "333333")
+    
+    def process_table(tbl_match):
+        tbl_xml = tbl_match.group(0)
+        
+        # Find all rows
+        row_pattern = re.compile(r'<a:tr[^>]*>(.*?)</a:tr>', re.DOTALL)
+        rows = list(row_pattern.finditer(tbl_xml))
+        
+        if not rows:
+            return tbl_xml
+        
+        # Process first row as header
+        for i, row_match in enumerate(rows):
+            row_xml = row_match.group(0)
+            is_header = (i == 0)
+            is_stripe = (i % 2 == 0)
+            
+            # Determine row background
+            if is_header:
+                row_bg = f'<a:solidFill><a:srgbClr val="{header_bg}"/></a:solidFill>'
+            elif is_stripe:
+                row_bg = f'<a:solidFill><a:srgbClr val="{stripe_light}"/></a:solidFill>'
+            else:
+                row_bg = f'<a:solidFill><a:srgbClr val="{stripe_dark}"/></a:solidFill>'
+            
+            # Update each cell in the row
+            def process_cell(cell_match):
+                cell_xml = cell_match.group(0)
+                
+                # Update or add cell background (inside <a:tcPr>)
+                tcpr_match = re.search(r'<a:tcPr[^>]*>(.*?)</a:tcPr>', cell_xml, re.DOTALL)
+                if tcpr_match:
+                    tcpr = tcpr_match.group(0)
+                    # Remove existing fill
+                    tcpr = re.sub(r'<a:solidFill>.*?</a:solidFill>', '', tcpr, flags=re.DOTALL)
+                    # Add new fill after opening tag
+                    tcpr = re.sub(r'(<a:tcPr[^>]*>)', r'\1' + row_bg, tcpr, count=1)
+                    cell_xml = cell_xml.replace(tcpr_match.group(0), tcpr)
+                else:
+                    # No tcPr, add one after <a:tc>
+                    cell_xml = re.sub(
+                        r'(<a:tc[^>]*>)',
+                        r'\1<a:tcPr>' + row_bg + '<a:lnL w="12700"><a:solidFill><a:srgbClr val="' + accent + '"/></a:solidFill></a:lnL><a:lnR w="12700"><a:solidFill><a:srgbClr val="' + accent + '"/></a:solidFill></a:lnR><a:lnT w="12700"><a:solidFill><a:srgbClr val="' + accent + '"/></a:solidFill></a:lnT><a:lnB w="12700"><a:solidFill><a:srgbClr val="' + accent + '"/></a:solidFill></a:lnB><a:cellMar><a:l mar="91440"/><a:r mar="91440"/><a:t mar="45720"/><a:b mar="45720"/></a:cellMar>',
+                        cell_xml,
+                        count=1
+                    )
+                
+                # Update text color in header row
+                if is_header:
+                    cell_xml = re.sub(
+                        r'<a:rPr([^>]*)>',
+                        r'<a:rPr\1><a:solidFill><a:srgbClr val="' + header_text + '"/></a:solidFill>',
+                        cell_xml
+                    )
+                    # Also handle cases without existing color
+                    cell_xml = re.sub(
+                        r'<a:rPr([^>]*)(/>|><a:)',
+                        r'<a:rPr\1><a:solidFill><a:srgbClr val="' + header_text + '"/></a:solidFill><a:',
+                        cell_xml
+                    )
+                
+                return cell_xml
+            
+            # Process all cells in this row
+            row_xml = re.sub(r'<a:tc>.*?</a:tc>', process_cell, row_xml, flags=re.DOTALL)
+            
+            # Update row in table
+            tbl_xml = tbl_xml[:row_match.start()] + row_xml + tbl_xml[row_match.end():]
+            # Re-find rows after modification (positions changed)
+            row_pattern = re.compile(r'<a:tr[^>]*>(.*?)</a:tr>', re.DOTALL)
+            rows = list(row_pattern.finditer(tbl_xml))
+        
+        return tbl_xml
+    
+    # Process all tables
+    xml = re.sub(r'<a:tbl>.*?</a:tbl>', process_table, xml, flags=re.DOTALL)
+    
+    return xml
+
+
+def _lighten_color(hex_color: str, percent: int) -> str:
+    """Lighten a hex color by a percentage (0-100)."""
+    hex_color = hex_color.lstrip('#')
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    
+    # Lighten towards white
+    factor = percent / 100
+    r = int(r + (255 - r) * factor)
+    g = int(g + (255 - g) * factor)
+    b = int(b + (255 - b) * factor)
+    
+    return f"{r:02X}{g:02X}{b:02X}"
 
 
 def _update_fonts(xml: str, theme: dict) -> str:

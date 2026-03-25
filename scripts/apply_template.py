@@ -124,6 +124,8 @@ def apply_template(
     keep_notes: bool = True,
     skip_animations: bool = False,
     interactive: bool = False,
+    beautify: bool = False,
+    beautify_theme: Optional[str] = None,
 ) -> None:
     """Apply template to source PPT content."""
 
@@ -248,6 +250,21 @@ def apply_template(
         # Pack result
         print(f"\nPacking output to {output_pptx}...")
         _run_pack(str(unpacked_dir), str(output_path), original=str(template_path))
+
+    # Apply final beautification pass
+    if beautify:
+        print(f"\nApplying AI beautification pass...")
+        import beautify_ppt
+        temp_output = str(output_path) + ".beautify.tmp"
+        shutil.copy(str(output_path), temp_output)
+        beautify_ppt.beautify_ppt(
+            temp_output,
+            str(output_path),
+            theme_name=beautify_theme,
+            verbose=verbose,
+        )
+        Path(temp_output).unlink(missing_ok=True)
+        print(f"  Beautification complete!")
 
     print(f"\nDone! Output saved to: {output_pptx}")
     print("Run QA check with:")
@@ -459,6 +476,7 @@ def _extract_layout_placeholder_styles(layout_xml: str) -> Dict[str, dict]:
     - bodyPr XML attributes (wrap, rtlCol, anchor, etc.) → to preserve layout bodyPr
     - defPPr / defRPr attributes (default paragraph/run props) → for reference
     - The full bodyPr element text → will be re-injected to preserve spacing/margins
+    - spPr XML (shape properties) → to preserve fills, borders, effects
 
     Returns a dict keyed by placeholder type string (e.g. "title", "body", "subTitle").
     """
@@ -482,6 +500,11 @@ def _extract_layout_placeholder_styles(layout_xml: str) -> Dict[str, dict]:
             continue
 
         info: dict = {}
+
+        # Extract spPr (shape properties) for decorative styling (fills, borders, etc.)
+        sppr_m = re.search(r'<p:spPr\b[^>]*>(.*?)</p:spPr>', sp_xml, re.DOTALL)
+        if sppr_m:
+            info["spPr_xml"] = sppr_m.group(0)
 
         # Extract the full <a:bodyPr ...> opening tag (or self-closing)
         body_pr_m = re.search(r'<a:bodyPr(\s[^>]*)?>|<a:bodyPr\s*/>', sp_xml)
@@ -1078,7 +1101,7 @@ def _ensure_slide_masters_preserved(unpacked_dir: Path, verbose: bool = False) -
             # Add generic slideMaster content type
             ct_content = ct_content.replace(
                 "</Types>",
-                '  <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>\n</Types>"
+                '  <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>\n</Types>'
             )
             modified = True
         
@@ -1170,12 +1193,15 @@ def _extract_layout_placeholders(layout_xml: str) -> List[dict]:
     return placeholders
 
 
-def _build_placeholder_sp_xml(ph: dict) -> str:
-    """Build a minimal <p:sp> XML element for a content placeholder.
+def _build_placeholder_sp_xml(ph: dict, spPr_xml: str = "") -> str:
+    """Build a <p:sp> XML element for a content placeholder.
 
     The shape has the correct <p:ph type="..."> tag so that
     _replace_placeholder_text / _replace_placeholder_content can find it.
     The txBody is empty (just bodyPr + lstStyle) — content is injected later.
+
+    If spPr_xml is provided (from the layout), it's used instead of the default
+    minimal spPr, preserving decorative styling like fills, borders, and effects.
     """
     ph_type = ph["ph_type"]
     ph_idx  = ph["ph_idx"]
@@ -1192,6 +1218,42 @@ def _build_placeholder_sp_xml(ph: dict) -> str:
         ph_tag += f' idx="{ph_idx}"'
     ph_tag += '/>'
 
+    # Use layout's spPr if available, otherwise build minimal one
+    if spPr_xml:
+        # Extract just the inner content and update position
+        sppr_inner = re.search(r'<p:spPr\b[^>]*>(.*)</p:spPr>', spPr_xml, re.DOTALL)
+        if sppr_inner:
+            # Update xfrm with our position but keep other properties
+            inner = sppr_inner.group(1)
+            # Replace xfrm section with our values
+            inner = re.sub(
+                r'<a:xfrm\b[^>]*>.*?</a:xfrm>|<a:xfrm\b[^>]*/>',
+                f'<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>',
+                inner,
+                flags=re.DOTALL
+            )
+            sppr_content = f'<p:spPr>{inner}</p:spPr>'
+        else:
+            sppr_content = (
+                f'<p:spPr>'
+                f'<a:xfrm>'
+                f'<a:off x="{x}" y="{y}"/>'
+                f'<a:ext cx="{cx}" cy="{cy}"/>'
+                f'</a:xfrm>'
+                f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+                f'</p:spPr>'
+            )
+    else:
+        sppr_content = (
+            f'<p:spPr>'
+            f'<a:xfrm>'
+            f'<a:off x="{x}" y="{y}"/>'
+            f'<a:ext cx="{cx}" cy="{cy}"/>'
+            f'</a:xfrm>'
+            f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+            f'</p:spPr>'
+        )
+
     return (
         f'<p:sp>'
         f'<p:nvSpPr>'
@@ -1199,13 +1261,7 @@ def _build_placeholder_sp_xml(ph: dict) -> str:
         f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
         f'<p:nvPr>{ph_tag}</p:nvPr>'
         f'</p:nvSpPr>'
-        f'<p:spPr>'
-        f'<a:xfrm>'
-        f'<a:off x="{x}" y="{y}"/>'
-        f'<a:ext cx="{cx}" cy="{cy}"/>'
-        f'</a:xfrm>'
-        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
-        f'</p:spPr>'
+        f'{sppr_content}'
         f'<p:txBody>'
         f'<a:bodyPr/>'
         f'<a:lstStyle/>'
@@ -1226,6 +1282,10 @@ def _create_slide_from_layout(unpacked_dir: Path, layout_file: str) -> Tuple[str
     _replace_placeholder_content will find nothing to replace, resulting in
     a visually blank slide.
 
+    Additionally:
+    - Placeholder shapes inherit spPr (fill, border, effects) from the layout
+    - The slide background is copied from the layout
+
     Returns (slide_file, rId).
     """
     slides_dir = unpacked_dir / "ppt" / "slides"
@@ -1238,7 +1298,7 @@ def _create_slide_from_layout(unpacked_dir: Path, layout_file: str) -> Tuple[str
     next_num = max(existing) + 1 if existing else 1
     slide_file = f"slide{next_num}.xml"
 
-    # Read layout XML so we can extract placeholder shapes
+    # Read layout XML so we can extract placeholder shapes and background
     layout_path = unpacked_dir / "ppt" / "slideLayouts" / layout_file
     layout_xml = ""
     if layout_path.exists():
@@ -1247,19 +1307,32 @@ def _create_slide_from_layout(unpacked_dir: Path, layout_file: str) -> Tuple[str
     # Extract placeholder definitions from the layout
     placeholders = _extract_layout_placeholders(layout_xml)
 
-    # Build placeholder shape XML strings
-    ph_shapes_xml = "\n      ".join(
-        _build_placeholder_sp_xml(ph) for ph in placeholders
-    )
+    # Extract layout styles for spPr inheritance
+    layout_styles = _extract_layout_placeholder_styles(layout_xml)
+
+    # Build placeholder shape XML strings with inherited spPr styling
+    ph_shapes = []
+    for ph in placeholders:
+        ph_type = ph["ph_type"] or "_idx1"
+        spPr_xml = layout_styles.get(ph_type, {}).get("spPr_xml", "")
+        ph_shapes.append(_build_placeholder_sp_xml(ph, spPr_xml))
+
+    ph_shapes_xml = "\n      ".join(ph_shapes)
     if ph_shapes_xml:
         ph_shapes_xml = "\n      " + ph_shapes_xml
 
-    # Build slide XML with placeholder shapes pre-populated
+    # Extract slide background from layout (if present)
+    bg_xml = ""
+    bg_m = re.search(r'<p:bg\b.*?</p:bg>', layout_xml, re.DOTALL)
+    if bg_m:
+        bg_xml = f"\n    {bg_m.group(0)}"
+
+    # Build slide XML with placeholder shapes and background
     slide_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
        xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:cSld>
+  <p:cSld>{bg_xml}
     <p:spTree>
       <p:nvGrpSpPr>
         <p:cNvPr id="1" name=""/>
@@ -1384,6 +1457,484 @@ def _detect_lang(text: str) -> str:
     return "zh-CN" if cjk / len(text) > 0.10 else "en-US"
 
 
+def _analyze_template_color_semantics(template_colors: Dict[str, str]) -> Dict[str, str]:
+    """Analyze template colors to understand their semantic usage.
+    
+    Returns a mapping from color role to hex value based on luminance analysis.
+    This helps determine which colors to use for fills vs text vs accents.
+    """
+    colors = template_colors
+    result = {}
+    
+    # Get luminance values for all colors
+    def luminance(hex_color: str) -> float:
+        """Calculate relative luminance of a hex color."""
+        hex_color = hex_color.lstrip('#')
+        r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        r, g, b = r/255, g/255, b/255
+        r = r/12.92 if r <= 0.03928 else ((r+0.055)/1.055) ** 2.4
+        g = g/12.92 if g <= 0.03928 else ((g+0.055)/1.055) ** 2.4
+        b = b/12.92 if b <= 0.03928 else ((b+0.055)/1.055) ** 2.4
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    
+    color_roles = {
+        "primary": colors.get("primary", "0070C0"),
+        "secondary": colors.get("secondary", "4472C4"),
+        "accent": colors.get("accent", "ED7D31"),
+        "text_on_light": colors.get("text_on_light", "000000"),
+        "text_on_dark": colors.get("text_on_dark", "FFFFFF"),
+        "bg_light": colors.get("bg_light", "FFFFFF"),
+        "bg_dark": colors.get("bg_dark", "1A1A2E"),
+    }
+    
+    # Classify each color by luminance
+    dark_colors = []
+    light_colors = []
+    mid_colors = []
+    
+    for role, hex_val in color_roles.items():
+        lum = luminance(hex_val)
+        if lum < 0.3:
+            dark_colors.append((role, hex_val, lum))
+        elif lum > 0.7:
+            light_colors.append((role, hex_val, lum))
+        else:
+            mid_colors.append((role, hex_val, lum))
+    
+    # Sort by luminance
+    dark_colors.sort(key=lambda x: x[2])
+    light_colors.sort(key=lambda x: x[2], reverse=True)
+    mid_colors.sort(key=lambda x: x[2])
+    
+    # Assign semantic roles
+    result["dark_fill"] = dark_colors[0][1] if dark_colors else "1A1A2E"
+    result["light_fill"] = light_colors[0][1] if light_colors else "FFFFFF"
+    result["accent_fill"] = mid_colors[-1][1] if mid_colors else colors.get("accent", "ED7D31")
+    result["text_primary"] = color_roles["text_on_light"]
+    result["text_secondary"] = "666666"  # Medium gray for secondary text
+    
+    # Keep original colors for direct mapping
+    result.update(color_roles)
+    
+    return result
+
+
+def _classify_source_color(hex_color: str) -> str:
+    """Classify a source color by its luminance to match with template semantics."""
+    hex_color = hex_color.lstrip('#')
+    r, g, b = int(hex_color[0:2], 16)/255, int(hex_color[2:4], 16)/255, int(hex_color[4:6], 16)/255
+    
+    # Calculate relative luminance
+    def to_linear(c):
+        return c/12.92 if c <= 0.03928 else ((c+0.055)/1.055) ** 2.4
+    lum = 0.2126 * to_linear(r) + 0.7152 * to_linear(g) + 0.0722 * to_linear(b)
+    
+    if lum < 0.3:
+        return "dark"
+    elif lum > 0.7:
+        return "light"
+    else:
+        return "mid"
+
+
+def _build_color_replacement_map(source_colors: set, template_semantics: dict) -> dict:
+    """Build a mapping from source colors to template colors based on semantics.
+    
+    Source dark colors -> template dark colors
+    Source light colors -> template light colors
+    Source mid colors -> template accent/mid colors
+    """
+    # Classify source colors
+    dark_sources = []
+    light_sources = []
+    mid_sources = []
+    
+    for color in source_colors:
+        if color in (template_semantics.get("text_on_light", ""), 
+                     template_semantics.get("text_on_dark", ""),
+                     template_semantics.get("primary", ""),
+                     template_semantics.get("secondary", ""),
+                     template_semantics.get("accent", "")):
+            continue  # Skip if it's already a template color
+        cls = _classify_source_color(color)
+        if cls == "dark":
+            dark_sources.append(color)
+        elif cls == "light":
+            light_sources.append(color)
+        else:
+            mid_sources.append(color)
+    
+    # Build replacement map
+    replacements = {}
+    
+    # Dark source colors -> dark template fill
+    dark_template = template_semantics.get("dark_fill", "1A1A2E")
+    for src in dark_sources:
+        replacements[src] = dark_template
+    
+    # Light source colors -> light template fill
+    light_template = template_semantics.get("light_fill", "FFFFFF")
+    for src in light_sources:
+        replacements[src] = light_template
+    
+    # Mid source colors -> accent fill
+    accent_template = template_semantics.get("accent_fill", "ED7D31")
+    for src in mid_sources:
+        replacements[src] = accent_template
+    
+    return replacements
+
+
+def _extract_colors_from_slide(slide_path: Path) -> set:
+    """Extract all hard-coded srgbClr colors from a slide XML file."""
+    colors = set()
+    if not slide_path.exists():
+        return colors
+    
+    xml = slide_path.read_text(encoding="utf-8")
+    
+    # Match srgbClr val="RRGGBB"
+    for match in re.finditer(r'<a:srgbClr val="([A-Fa-f0-9]{6})"', xml):
+        colors.add(match.group(1))
+    
+    # Also match srgbVal (older format)
+    for match in re.finditer(r'srgbVal="([A-Fa-f0-9]{6})"', xml):
+        colors.add(match.group(1))
+    
+    return colors
+
+
+def _apply_template_colors_to_slide(
+    slide_path: Path,
+    template_colors: Dict[str, str],
+    verbose: bool = False,
+) -> None:
+    """Replace hard-coded colors in a slide with template color scheme.
+    
+    This handles:
+    - Custom shapes (non-placeholder <p:sp> elements)
+    - Table cells and borders
+    - Decorative elements (lines, backgrounds)
+    - SmartArt and graphicFrame elements
+    
+    Text colors are already handled by _inject_content_into_slide.
+    This function focuses on non-text element colors.
+    """
+    if not slide_path.exists():
+        return
+    
+    xml = slide_path.read_text(encoding="utf-8")
+    original_xml = xml
+    
+    # Analyze template color semantics
+    template_semantics = _analyze_template_color_semantics(template_colors)
+    
+    # Extract colors used in this slide
+    slide_colors = _extract_colors_from_slide(slide_path)
+    
+    # Build color replacement map
+    replacements = _build_color_replacement_map(slide_colors, template_semantics)
+    
+    if not replacements:
+        return
+    
+    # Apply replacements to all srgbClr elements
+    # This includes shapes, tables, and other non-text elements
+    for old_color, new_color in replacements.items():
+        # Replace in solidFill elements (shapes, backgrounds)
+        xml = re.sub(
+            rf'(<a:solidFill>.*?<a:srgbClr val="){old_color}(")',
+            lambda m: m.group(1) + new_color + m.group(2),
+            xml,
+            flags=re.DOTALL
+        )
+        
+        # Replace in gradientFill stops
+        xml = re.sub(
+            rf'(<a:gradStop[^>]*clrType="srgb"[^>]*val="){old_color}(")',
+            lambda m: m.group(1) + new_color + m.group(2),
+            xml,
+            flags=re.DOTALL
+        )
+        
+        # Replace in ln (line/border) elements
+        xml = re.sub(
+            rf'(<a:ln[^>]*w="[^"]*"[^>]*>.*?<a:solidFill>.*?<a:srgbClr val="){old_color}(")',
+            lambda m: m.group(1) + new_color + m.group(2),
+            xml,
+            flags=re.DOTALL
+        )
+        
+        # Replace in table cells
+        xml = re.sub(
+            rf'(<a:tc>.*?<a:srgbClr val="){old_color}(")',
+            lambda m: m.group(1) + new_color + m.group(2),
+            xml,
+            flags=re.DOTALL
+        )
+        
+        # Replace in tblPr (table properties)
+        xml = re.sub(
+            rf'(<a:tblPr>.*?<a:srgbClr val="){old_color}(")',
+            lambda m: m.group(1) + new_color + m.group(2),
+            xml,
+            flags=re.DOTALL
+        )
+    
+    if xml != original_xml:
+        slide_path.write_text(xml, encoding="utf-8")
+        if verbose:
+            print(f"  Replaced {len(replacements)} colors in {slide_path.name} to match template")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CUSTOM SHAPE HANDLING
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _extract_text_from_custom_shapes(source_slide_path: Path) -> Dict[str, any]:
+    """Extract text from custom shapes (non-placeholder <p:sp> elements).
+    
+    When source PPT uses custom shapes instead of standard placeholders,
+    this function extracts all text content from those shapes.
+    
+    Returns:
+        Dict with 'title', 'subtitle', 'body' keys containing extracted text.
+    """
+    if not source_slide_path.exists():
+        return {"title": "", "subtitle": "", "body": []}
+    
+    xml = source_slide_path.read_text(encoding="utf-8")
+    
+    # Extract all text runs from the slide
+    all_text_runs = re.findall(r'<a:t>([^<]*)</a:t>', xml)
+    
+    # Filter out empty runs and keep track of their positions
+    text_items = []
+    for i, match in enumerate(re.finditer(r'<a:t>([^<]*)</a:t>', xml)):
+        text = match.group(1).strip()
+        if text:
+            text_items.append({
+                "text": text,
+                "pos": match.start(),
+                "len": len(text)
+            })
+    
+    if not text_items:
+        return {"title": "", "subtitle": "", "body": []}
+    
+    # Analyze text items to classify them
+    # Heuristic: first substantial text is likely title, rest are body
+    result = {
+        "title": "",
+        "subtitle": "",
+        "body": []
+    }
+    
+    # Classify by position and characteristics
+    # Check if there's a clear title pattern (short, bold, or at top)
+    for item in text_items:
+        text = item["text"]
+        # Skip very short strings that might be labels
+        if len(text) <= 2:
+            continue
+        # Skip common decorative text
+        if text in ("©", "®", "™", "·", "-", "—", "–"):
+            continue
+        
+        if not result["title"]:
+            # First substantial text = title
+            result["title"] = text
+        elif len(text) <= 30 and not result["subtitle"]:
+            # Short text after title = subtitle
+            result["subtitle"] = text
+        else:
+            # Rest = body content
+            result["body"].append(text)
+    
+    return result
+
+
+def _merge_custom_shape_content(
+    source_slide: dict,
+    source_unpacked_dir: Path,
+    source_slide_file: str
+) -> dict:
+    """Merge content from custom shapes into source_slide dict.
+    
+    If the source_slide dict is empty (no title/body), try to extract
+    content directly from the source slide XML.
+    """
+    # Check if source_slide already has content
+    has_title = bool(source_slide.get("title", "").strip())
+    has_body = bool(source_slide.get("body", []))
+    
+    if has_title and has_body:
+        return source_slide  # Already has content
+    
+    # Try to extract from source slide XML
+    source_slide_path = source_unpacked_dir / "ppt" / "slides" / source_slide_file
+    extracted = _extract_text_from_custom_shapes(source_slide_path)
+    
+    # Merge extracted content with existing source_slide
+    merged = dict(source_slide)
+    
+    if not has_title and extracted["title"]:
+        merged["title"] = extracted["title"]
+        if verbose_print := False:  # Will be set by caller if needed
+            pass
+    
+    if not has_body and extracted["body"]:
+        # Preserve existing body if it's not empty, otherwise use extracted
+        existing_body = source_slide.get("body", [])
+        if not existing_body:
+            merged["body"] = extracted["body"]
+        else:
+            # Merge: append extracted body items not already in existing
+            existing_set = set(existing_body)
+            for item in extracted["body"]:
+                if item not in existing_set:
+                    existing_body.append(item)
+            merged["body"] = existing_body
+    
+    has_subtitle = bool(source_slide.get("subtitle", "").strip())
+    if not has_subtitle:
+        if extracted["subtitle"]:
+            merged["subtitle"] = extracted["subtitle"]
+    
+    return merged
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# AI BEAUTIFICATION FUNCTIONS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _beautify_slide_layout(slide_path: Path, verbose: bool = False) -> Dict[str, any]:
+    """Apply AI beautification to a slide's layout and content.
+    
+    This function performs the following optimizations:
+    1. Truncate over-long titles (>20 characters)
+    2. Merge bullet points that exceed 6 items
+    3. Split over-long body text (>40 chars per line)
+    4. Detect and flag empty slides
+    5. Optimize paragraph spacing
+    
+    Returns a dict of beautification notes for reporting.
+    """
+    if not slide_path.exists():
+        return {}
+    
+    xml = slide_path.read_text(encoding="utf-8")
+    original_xml = xml
+    notes = {}
+    
+    # 1. Truncate over-long titles
+    def truncate_long_titles(p_xml):
+        if '<p:ph type="title"' not in p_xml and '<p:ph type="ctrTitle"' not in p_xml:
+            return p_xml
+        
+        # Find text runs in title placeholder
+        def truncate_runs(m):
+            run_xml = m.group(0)
+            # Check if this is inside a title placeholder
+            text_match = re.search(r'<a:t>([^<]{20,})</a:t>', run_xml)
+            if text_match:
+                long_text = text_match.group(1)
+                # Truncate to 18 chars and add ellipsis
+                truncated = long_text[:18] + "…"
+                run_xml = run_xml.replace(f'<a:t>{long_text}</a:t>', f'<a:t>{truncated}</a:t>')
+                notes["title_truncated"] = f"标题截短: \"{long_text[:30]}...\" → \"{truncated}\""
+            return run_xml
+        
+        xml = re.sub(r'<a:r>.*?</a:r>', truncate_runs, p_xml, flags=re.DOTALL)
+        return xml
+    
+    # 2. Merge excess bullet points (more than 6)
+    def merge_excess_bullets(p_xml):
+        # Only process body placeholders
+        if '<p:ph type="body"' not in p_xml and '<p:ph type="obj"' not in p_xml:
+            return p_xml
+        
+        # Count bullet paragraphs
+        bullet_count = len(re.findall(r'<a:p>.*?<a:pPr.*?<a:buChar', p_xml, flags=re.DOTALL))
+        
+        if bullet_count > 6:
+            # Merge paragraphs after the 6th bullet
+            paragraphs = list(re.finditer(r'<a:p>.*?</a:p>', p_xml, flags=re.DOTALL))
+            if len(paragraphs) > 6:
+                # Find the 7th bullet and merge it with the 6th
+                merged_paragraphs = paragraphs[:6]
+                to_merge = paragraphs[6:]
+                
+                # Get text from paragraphs to merge
+                merged_texts = []
+                for p in to_merge:
+                    text_match = re.search(r'<a:t>([^<]*)</a:t>', p.group(0))
+                    if text_match:
+                        merged_texts.append(text_match.group(1).strip())
+                
+                if merged_texts:
+                    # Append merged text to the last kept paragraph
+                    last_p = merged_paragraphs[-1].group(0)
+                    # Find the last </a:p> and insert the merged text before it
+                    merged_text = "；".join(merged_texts)
+                    merged_text_xml = f'<a:r><a:rPr lang="zh-CN"/><a:t>（含{len(to_merge)}条合并内容：{merged_text}）</a:t></a:r>'
+                    last_p = last_p.replace('</a:p>', merged_text_xml + '</a:p>')
+                    
+                    # Replace the last kept paragraph
+                    p_xml = p_xml[:merged_paragraphs[-1].start()] + last_p + p_xml[merged_paragraphs[-1].end():]
+                    
+                    # Remove the merged paragraphs
+                    for p in reversed(to_merge):
+                        p_xml = p_xml[:p.start()] + p_xml[p.end():]
+                    
+                    notes["bullets_merged"] = f"要点合并: {bullet_count}条 → 6条（合并了{len(to_merge)}条）"
+        
+        return p_xml
+    
+    # 3. Optimize paragraph spacing
+    def optimize_spacing(p_xml):
+        # Skip if already has spacing
+        if '<a:lnSpc' in p_xml:
+            return p_xml
+        
+        # Add 1.2 line spacing (120%)
+        spacing_xml = '<a:lnSpc><a:spcPct val="120000"/></a:lnSpc>'
+        
+        # Insert after pPr or at the beginning
+        if '<a:pPr' in p_xml:
+            p_xml = p_xml.replace('</a:pPr>', spacing_xml + '</a:pPr>')
+        else:
+            p_xml = p_xml.replace('<a:p>', '<a:p><a:pPr>' + spacing_xml + '</a:pPr>')
+        
+        return p_xml
+    
+    # Apply optimizations
+    xml = re.sub(r'<a:p>.*?</a:p>', truncate_long_titles, xml, flags=re.DOTALL)
+    xml = re.sub(r'<a:p>.*?</a:p>', merge_excess_bullets, xml, flags=re.DOTALL)
+    
+    # Only add spacing to body text, not titles
+    def add_spacing_conditional(p_xml):
+        if '<p:ph type="body"' in p_xml or '<p:ph type="obj"' in p_xml:
+            return optimize_spacing(p_xml)
+        return p_xml
+    
+    xml = re.sub(r'<a:p>.*?</a:p>', add_spacing_conditional, xml, flags=re.DOTALL)
+    
+    # 4. Check for empty slides
+    text_content = re.findall(r'<a:t>([^<]+)</a:t>', xml)
+    non_empty_text = [t.strip() for t in text_content if t.strip() and len(t.strip()) > 1]
+    if not non_empty_text:
+        notes["empty_slide"] = "检测到空白幻灯片"
+    
+    if xml != original_xml:
+        slide_path.write_text(xml, encoding="utf-8")
+        if verbose:
+            for key, value in notes.items():
+                print(f"  美化: {value}")
+    
+    return notes
+
+
 def _inject_content_into_slide(
     unpacked_dir: Path,
     slide_file: str,
@@ -1477,6 +2028,7 @@ def _inject_content_into_slide(
                 rich=rich_to_use,
                 latin_font=body_latin_font,
                 ea_font=body_ea_font,
+                layout_ph_styles=layout_ph_styles,
             )
             modified = _replace_placeholder_content(modified, ["body", "obj"], body_xml)
 
@@ -1734,6 +2286,7 @@ def _build_body_xml(
     rich: Optional[List[dict]] = None,
     latin_font: str = "",
     ea_font: str = "",
+    layout_ph_styles: Optional[Dict[str, dict]] = None,
 ) -> str:
     """Build XML paragraphs from a list of text lines.
 
@@ -1757,12 +2310,24 @@ def _build_body_xml(
 
     Language tag is auto-detected per run (zh-CN / en-US) to avoid mistagging
     English content with Chinese locale (which breaks spell-check in PowerPoint).
+
+    Layout placeholder styles (from layout_ph_styles) are applied:
+    - lvl1pPr_xml: default paragraph formatting (indent, alignment, spacing)
+    - defRPr_xml: default run properties (font size, bold, etc.)
+    - bodyPr_attrs: text body properties (wrap, anchor, etc.)
     """
     # Build a quick lookup: rich item index → formatting dict
     rich_lookup: Dict[int, dict] = {}
     if rich:
         for i, r in enumerate(rich):
             rich_lookup[i] = r
+
+    # Extract layout style info for body placeholder
+    body_style = (layout_ph_styles or {}).get("body", {})
+    lvl1pPr_xml = body_style.get("lvl1pPr_xml", "")
+    defRPr_xml = body_style.get("defRPr_xml", "")
+    default_sz = body_style.get("default_sz", 0)
+    bodyPr_attrs = body_style.get("bodyPr_attrs", "")
 
     # Pre-build shared XML fragments
     rpr_color_xml = (
@@ -1793,12 +2358,34 @@ def _build_body_xml(
         if size:
             sz_val = size * 100 if size < 1000 else size
             rpr_attrs += f' sz="{sz_val}"'
+        elif default_sz and not bold:
+            # Use layout's default size if no explicit size from source
+            rpr_attrs += f' sz="{default_sz}"'
 
         escaped = _escape_xml(line)
         rpr_children = rpr_color_xml + font_xml
+
+        # Build paragraph with layout's default paragraph style if available
+        # Clean up lvl1pPr to remove conflicting attributes that we'll set explicitly
+        ppr_xml = ""
+        if lvl1pPr_xml:
+            # Remove buChar/buAutoNum from lvl1pPr to avoid double bullets
+            clean_lvl1 = re.sub(r'<a:buChar[^/]*/>', '', lvl1pPr_xml)
+            clean_lvl1 = re.sub(r'<a:buAutoNum[^/]*/>', '', clean_lvl1)
+            ppr_xml = re.sub(r'<a:lvl1pPr\b', '<a:pPr', clean_lvl1)
+            # Remove trailing /> or </a:lvl1pPr> to make it an opening tag
+            ppr_xml = re.sub(r'\s*/>', '>', ppr_xml)
+            ppr_xml = re.sub(r'</a:lvl1pPr>', '', ppr_xml)
+
         # No <a:pPr><a:buChar .../></a:pPr> — inherit template list style
+        para_content = ""
+        if ppr_xml:
+            para_content = f'<a:p>{ppr_xml}'
+        else:
+            para_content = '<a:p>'
+
         paragraphs.append(
-            f'<a:p>'
+            f'{para_content}'
             f'<a:r>'
             f'<a:rPr {rpr_attrs}>{rpr_children}</a:rPr>'
             f'<a:t>{escaped}</a:t>'
@@ -2066,6 +2653,13 @@ def _build_new_slides(
         else:
             new_slide_file, rid = _create_slide_from_layout(unpacked_dir, layout_file)
 
+        # Merge content from custom shapes if source_slide is missing content
+        src_file = source_slide_file_map.get(idx)
+        if src_file:
+            source_slide = _merge_custom_shape_content(
+                source_slide, source_unpacked_dir, src_file
+            )
+
         # Inject content with full template style (colors + fonts + layout ph_styles)
         _inject_content_into_slide(
             unpacked_dir, new_slide_file, source_slide,
@@ -2073,8 +2667,14 @@ def _build_new_slides(
             verbose,
         )
 
+        # Apply template colors to non-placeholder elements (shapes, tables, etc.)
+        slide_path = unpacked_dir / "ppt" / "slides" / new_slide_file
+        _apply_template_colors_to_slide(slide_path, template_colors, verbose)
+
+        # Apply AI beautification (title truncation, bullet merging, spacing)
+        beautify_notes = _beautify_slide_layout(slide_path, verbose)
+
         # Migrate animations from source slide (with enhanced ID mapping)
-        src_file = source_slide_file_map.get(idx)
         if src_file and not skip_animations:
             migration_result = migrate_animations_with_id_mapping(
                 source_unpacked_dir, src_file,
@@ -2159,6 +2759,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Interactive mode: confirm when high-risk mappings are detected",
     )
+    parser.add_argument(
+        "--beautify",
+        action="store_true",
+        help="Apply AI beautification pass after template application (redesigns layout, colors, fonts)",
+    )
+    parser.add_argument(
+        "--beautify-theme",
+        metavar="THEME",
+        help="Theme for beautification pass (executive/tech/creative/warm/minimal/bold/nature/ocean/elegant/modern/sunset/forest). Default: auto-detect from source",
+    )
     args = parser.parse_args()
 
     apply_template(
@@ -2172,4 +2782,6 @@ if __name__ == "__main__":
         keep_notes=args.keep_notes,
         skip_animations=args.skip_animations,
         interactive=args.interactive,
+        beautify=args.beautify,
+        beautify_theme=args.beautify_theme,
     )

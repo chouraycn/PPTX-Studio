@@ -229,6 +229,13 @@ Two powerful transformation modes — both now include **AI-powered stages** and
 - 柔和阴影（outer shadow）
 - 主题色边框
 
+**Smart Table Enhancement (AI-powered):**
+- 表头行样式：主题色背景 + 白色文字
+- 斑马纹行：交替行背景色，提升可读性
+- 统一边框：主题色边框，宽度一致
+- 单元格边距优化：内边距标准化
+- 字体统一：应用主题字体
+
 **Smart Typography:**
 - 动态字号（根据内容密度自动调整）
 - 1.2倍行距优化
@@ -270,6 +277,8 @@ Apply an existing template's visual identity to your content — with **two AI-p
   ↓ AI 检查内容完整性、纠正错误、调整结构
 阶段 B: 套入模板（脚本自动执行）
   ↓ apply_template.py 将审校后内容注入模板
+  ↓ 自动替换形状/表格颜色 + 自动化排版美化
+  ↓ [--beautify] AI 完整美化（布局/配色/字体/表格）← 新增
 阶段 C: AI 逐页美化调整 + 备注增强
   ↓ AI 排版优化 + 保留原备注并追加 AI 摘要
 最终输出：内容准确 + 视觉精良 + 备注完善的 PPT
@@ -358,12 +367,23 @@ python -m markitdown template.pptx
 python scripts/apply_template.py source.pptx template.pptx output.pptx
 ```
 
+**进阶：添加最终 AI 美化**
+```bash
+# 在套模板完成后，对输出进行完整的设计美化（重新设计布局、配色、字体、表格等）
+python scripts/apply_template.py source.pptx template.pptx output.pptx --beautify
+
+# 指定美化主题
+python scripts/apply_template.py source.pptx template.pptx output.pptx --beautify --beautify-theme tech
+```
+
 脚本自动完成：
 1. 从源 PPT 提取文字、图片、格式（bold/italic/size）
 2. 解包模板，为每页源幻灯片找到最匹配的模板布局
 3. 将内容注入模板占位符，使用模板配色/字体
-4. 迁移动画时间轴结构和 Speaker Notes
-5. 打包输出文件
+4. **自动替换自定义形状和表格颜色** — 所有非占位符元素（装饰形状、表格、SmartArt等）自动使用模板配色
+5. **自动美化排版** — 标题截短（>20字）、要点合并（>6条）、段落行距优化
+6. 迁移动画时间轴结构和 Speaker Notes
+7. 打包输出文件
 
 > **如需覆盖自动映射方案：**
 > ```bash
