@@ -761,6 +761,42 @@ Background: #FFFFFF / #F0F8FF
 Font: Calibri Bold + Calibri
 ```
 
+### Elegant — 优雅深灰蓝（高端商务/咨询）
+```
+Primary: #2C3E50 (deep slate blue)
+Secondary: #E8E8E8 (light silver)
+Accent: #E74C3C (coral red)
+Background: #FAFAFA / #1A1A2E
+Font: Georgia + Calibri
+```
+
+### Modern — 现代紫罗兰（互联网/时尚/创新）
+```
+Primary: #6C5CE7 (soft purple)
+Secondary: #A29BFE (light lavender)
+Accent: #FD79A8 (pink)
+Background: #F8F9FA / #2D3436
+Font: Segoe UI + Segoe UI
+```
+
+### Sunset — 日落暖橙（能源/餐饮/生活方式）
+```
+Primary: #E17055 (burnt orange)
+Secondary: #FDCB6E (warm yellow)
+Accent: #D63031 (deep red)
+Background: #FFF9F0 / #2D142C
+Font: Georgia + Calibri
+```
+
+### Forest — 森林深绿（可持续发展/环保）
+```
+Primary: #1B4332 (deep forest)
+Secondary: #52B788 (sage green)
+Accent: #D8F3DC (pale mint)
+Background: #F1F8E9 / #081C15
+Font: Cambria + Calibri
+```
+
 ---
 
 ## Scripts Reference
@@ -920,6 +956,11 @@ automatically varies the visual layout across slides to prevent monotony:
 | `stat_highlight` | First item promoted to large rounded callout box |
 | `two_tone` | Left 35% colored panel + right 65% content |
 | `header_band` | Full-width colored top band above content |
+| `card_grid` | 2×2 card grid layout for multiple items |
+| `timeline` | Horizontal timeline with nodes and labels |
+| `split_diagonal` | Diagonal split layout for visual impact |
+| `image_focus` | Large image area with decorative frame |
+| `quote_block` | Centered quote with accent bar and quote marks |
 
 The variant is chosen automatically to avoid 3+ consecutive slides using
 the same layout. Use `--no-restructure` to disable if the source PPT already

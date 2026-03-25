@@ -257,15 +257,32 @@ def _print_mapping_plan(slide_mapping: List[dict], source_slides: List[dict]) ->
     print("─" * 60)
     print(f"  {'#':<4} {'Source Title':<30} {'Source Type':<16} {'→ Template Layout'}")
     print("─" * 60)
+    
+    auto_toc_count = sum(1 for sm in slide_mapping if sm.get("auto_generated_toc"))
+    regular_count = len(slide_mapping) - auto_toc_count
+    
     for sm in slide_mapping:
         idx = sm["source_index"]
-        title = source_titles.get(idx, "")[:28]
-        src_type = sm.get("source_type", "?")[:14]
-        tmpl = sm.get("template_layout", "?")
-        tmpl_type = sm.get("template_type", "")
-        print(f"  {idx:<4} {title:<30} {src_type:<16}   {tmpl} [{tmpl_type}]")
+        
+        # Handle auto-generated TOC slides
+        if sm.get("auto_generated_toc"):
+            title = "[AI生成目录]"
+            src_type = "auto-toc"
+            tmpl = sm.get("template_layout", "?")
+            tmpl_type = sm.get("template_type", "")
+            print(f"  {'*':<4} {title:<30} {src_type:<16}   {tmpl} [{tmpl_type}]")
+        else:
+            title = source_titles.get(idx, "")[:28]
+            src_type = sm.get("source_type", "?")[:14]
+            tmpl = sm.get("template_layout", "?")
+            tmpl_type = sm.get("template_type", "")
+            print(f"  {idx:<4} {title:<30} {src_type:<16}   {tmpl} [{tmpl_type}]")
+    
     print("─" * 60)
-    print(f"  Total: {len(slide_mapping)} slides")
+    print(f"  Total: {regular_count} source slides", end="")
+    if auto_toc_count:
+        print(f" + {auto_toc_count} AI-generated TOC")
+    print()
     print("─" * 60 + "\n")
 
 
@@ -520,9 +537,74 @@ def _detect_layout_type(layout_name: str, layout_xml: str) -> str:
     return "content_slide"
 
 
+def _detect_template_has_toc(template_layouts: List[dict]) -> bool:
+    """Check if template has a table of contents / agenda layout."""
+    toc_keywords = ["agenda", "contents", "outline", "目录", "大纲", "内容", "index"]
+    for layout in template_layouts:
+        layout_name = layout.get("layout_name", "").lower()
+        if any(kw in layout_name for kw in toc_keywords):
+            return True
+    return False
+
+
+def _detect_source_has_toc(source_slides: List[dict]) -> Optional[dict]:
+    """Check if source PPT already has a table of contents slide."""
+    toc_keywords = ["agenda", "contents", "outline", "目录", "大纲", "content"]
+    for slide in source_slides:
+        title = slide.get("title", "").lower()
+        if any(kw in title for kw in toc_keywords):
+            return slide
+        # Also check if it's classified as agenda type
+        if slide.get("type") == "agenda":
+            return slide
+    return None
+
+
+def _generate_toc_content(source_slides: List[dict]) -> dict:
+    """Generate table of contents content from source slide titles."""
+    toc_items = []
+    section_slides = []
+    
+    for slide in source_slides:
+        slide_type = slide.get("type", "content")
+        title = slide.get("title", "").strip()
+        
+        # Skip title slide and already identified TOC slide
+        if slide_type == "title" or slide.get("is_toc", False):
+            continue
+            
+        # Collect section headers and important slides
+        if slide_type == "section" and title:
+            section_slides.append({"title": title, "type": "section"})
+        elif title and len(title) < 50:  # Reasonable title length
+            # Avoid duplicates
+            if not any(item["title"] == title for item in section_slides):
+                section_slides.append({"title": title, "type": "content"})
+    
+    # Limit to 6-7 items for visual clarity
+    if len(section_slides) > 7:
+        section_slides = section_slides[:7]
+    
+    return {
+        "title": "目录",
+        "subtitle": "Contents",
+        "body": [item["title"] for item in section_slides],
+        "type": "agenda",
+        "layout_hint": "list_content",
+        "is_auto_generated": True,
+    }
+
+
 def _auto_map_slides(source_slides: List[dict], template_layouts: List[dict],
                     verbose: bool) -> List[dict]:
-    """Automatically map source slides to template layouts."""
+    """Automatically map source slides to template layouts with intelligent cycling.
+    
+    When source has more slides than template layouts, this function intelligently
+    cycles through available layouts to ensure visual variety and avoid monotony.
+    
+    Additionally, if the template has a TOC layout but the source doesn't have
+    a TOC slide, this function will auto-generate one.
+    """
     mapping = []
 
     # Build layout lookup by type
@@ -535,6 +617,21 @@ def _auto_map_slides(source_slides: List[dict], template_layouts: List[dict],
 
     # Fallback order when preferred type not found
     fallback_order = ["content_slide", "list_content", "title_slide", "section_header"]
+    
+    # Track layout usage for cycling when source slides > template layouts
+    layout_usage_count: Dict[str, int] = {}
+    last_used_layout: Dict[str, str] = {}  # Track last used layout per type
+    
+    # Check for TOC situation
+    template_has_toc = _detect_template_has_toc(template_layouts)
+    source_has_toc = _detect_source_has_toc(source_slides)
+    auto_toc_inserted = False
+    
+    if verbose:
+        if template_has_toc:
+            print("  Template has TOC layout detected")
+        if source_has_toc:
+            print(f"  Source has TOC slide: {source_has_toc.get('title', 'Untitled')}")
 
     for slide in source_slides:
         if "error" in slide:
@@ -548,37 +645,95 @@ def _auto_map_slides(source_slides: List[dict], template_layouts: List[dict],
 
         hint = slide.get("layout_hint", "content_slide")
         source_type = slide.get("type", "content")
+        
+        # Check if we should insert auto-generated TOC before first content slide
+        if (template_has_toc and not source_has_toc and not auto_toc_inserted 
+            and source_type not in ("title", "section") and slide["index"] > 1):
+            # Insert auto-generated TOC slide
+            toc_content = _generate_toc_content(source_slides)
+            toc_layout = None
+            
+            # Find best TOC layout
+            for layout_type in ["list_content", "content_slide", "section_header"]:
+                if layout_type in layouts_by_type and layouts_by_type[layout_type]:
+                    toc_layout = layouts_by_type[layout_type][0]
+                    break
+            
+            if toc_layout:
+                if verbose:
+                    print(f"  [AUTO-TOC] Inserting auto-generated table of contents "
+                          f"using layout: {toc_layout['layout_file']}")
+                
+                mapping.append({
+                    "source_index": 0,  # Special marker for auto-generated
+                    "source_type": "agenda",
+                    "template_layout": toc_layout["layout_file"],
+                    "template_type": toc_layout["detected_type"],
+                    "layout_name": toc_layout["layout_name"],
+                    "auto_generated_toc": True,
+                    "toc_content": toc_content,
+                })
+                auto_toc_inserted = True
 
-        # Find best matching layout
+        # Find best matching layout with cycling support
         chosen_layout = None
+        candidate_layouts = []
 
         # Try exact type match
         if hint in layouts_by_type and layouts_by_type[hint]:
-            chosen_layout = layouts_by_type[hint][0]
-
+            candidate_layouts = layouts_by_type[hint]
         # Try source_type if hint didn't work
-        if not chosen_layout and source_type in layouts_by_type:
-            chosen_layout = layouts_by_type[source_type][0]
-
+        elif source_type in layouts_by_type:
+            candidate_layouts = layouts_by_type[source_type]
         # Try fallbacks
-        if not chosen_layout:
+        else:
             for fb in fallback_order:
                 if fb in layouts_by_type:
-                    chosen_layout = layouts_by_type[fb][0]
+                    candidate_layouts = layouts_by_type[fb]
                     break
+        
+        # Ultimate fallback: all layouts
+        if not candidate_layouts and template_layouts:
+            candidate_layouts = template_layouts
 
-        # Ultimate fallback: first layout
-        if not chosen_layout and template_layouts:
-            chosen_layout = template_layouts[0]
+        # Choose layout with intelligent cycling
+        if candidate_layouts:
+            if len(candidate_layouts) == 1:
+                chosen_layout = candidate_layouts[0]
+            else:
+                # Find least recently used layout for this type to avoid repetition
+                min_usage = float('inf')
+                for layout in candidate_layouts:
+                    layout_file = layout["layout_file"]
+                    usage = layout_usage_count.get(layout_file, 0)
+                    if usage < min_usage:
+                        min_usage = usage
+                        chosen_layout = layout
+                
+                # If all have equal usage, pick one that's different from last used
+                if chosen_layout and min_usage > 0:
+                    last_layout = last_used_layout.get(hint or source_type)
+                    for layout in candidate_layouts:
+                        if layout["layout_file"] != last_layout:
+                            chosen_layout = layout
+                            break
 
         if chosen_layout:
+            layout_file = chosen_layout["layout_file"]
+            layout_usage_count[layout_file] = layout_usage_count.get(layout_file, 0) + 1
+            last_used_layout[hint or source_type] = layout_file
+            
             mapping.append({
                 "source_index": slide["index"],
                 "source_type": source_type,
-                "template_layout": chosen_layout["layout_file"],
+                "template_layout": layout_file,
                 "template_type": chosen_layout["detected_type"],
                 "layout_name": chosen_layout["layout_name"],
             })
+            
+            if verbose and len(source_slides) > len(template_layouts):
+                print(f"  Slide {slide['index']}: mapped to {layout_file} "
+                      f"(usage: {layout_usage_count[layout_file]})")
         else:
             print(f"Warning: No layout found for slide {slide['index']}", file=sys.stderr)
 
@@ -1565,12 +1720,52 @@ def _build_new_slides(
     verbose: bool,
 ) -> List[Tuple[str, str]]:
     """Create all new slides by duplicating template slides and injecting content."""
-    mapping_lookup = {sm["source_index"]: sm for sm in slide_mapping}
+    # Build lookup including auto-generated TOC slides (source_index=0)
+    mapping_lookup = {}
+    auto_toc_mappings = []
+    for sm in slide_mapping:
+        if sm.get("auto_generated_toc"):
+            auto_toc_mappings.append(sm)
+        else:
+            mapping_lookup[sm["source_index"]] = sm
+    
     layout_lookup = {l["layout_file"]: l for l in template_layouts}
     new_slides = []
+    auto_toc_processed = False
 
     for source_slide in source_slides:
         idx = source_slide.get("index", 0)
+        
+        # Check if we need to insert auto-generated TOC before this slide
+        if not auto_toc_processed and auto_toc_mappings:
+            # Insert TOC before first non-title slide (index > 1)
+            if idx > 1 and source_slide.get("type") not in ("title", "section"):
+                for toc_mapping in auto_toc_mappings:
+                    layout_file = toc_mapping["template_layout"]
+                    layout_info = layout_lookup.get(layout_file, {})
+                    layout_ph_styles = layout_info.get("ph_styles", {})
+                    
+                    # Create TOC slide
+                    template_source_slide = _find_template_slide_for_layout(unpacked_dir, layout_file)
+                    if template_source_slide:
+                        new_slide_file, rid = _duplicate_template_slide(unpacked_dir, template_source_slide)
+                    else:
+                        new_slide_file, rid = _create_slide_from_layout(unpacked_dir, layout_file)
+                    
+                    # Inject TOC content
+                    toc_content = toc_mapping.get("toc_content", {})
+                    _inject_content_into_slide(
+                        unpacked_dir, new_slide_file, toc_content,
+                        template_colors, template_fonts, layout_ph_styles,
+                        verbose,
+                    )
+                    
+                    if verbose:
+                        print(f"  [AUTO-TOC] Created {new_slide_file} with auto-generated table of contents")
+                    
+                    new_slides.append((new_slide_file, rid))
+                auto_toc_processed = True
+        
         if "error" in source_slide:
             print(f"  Skipping slide {idx} (parse error)")
             continue

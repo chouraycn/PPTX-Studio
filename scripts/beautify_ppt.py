@@ -1522,27 +1522,8 @@ def _remove_antipatterns(xml: str) -> str:
     # These are shapes with height < 0.05" (45720 EMU) positioned right after a title
     # We detect them heuristically: LINE shapes or very thin RECTANGLE shapes
 
-    def remove_thin_lines(m):
-        sp_xml = m.group(0)
-        # Check if it's a line shape
-        if '<p:ph' in sp_xml:
-            return sp_xml  # Don't remove placeholder shapes
-
-        # Check for LINE geometry or very flat rectangle
-        is_line = (
-            'preset="line"' in sp_xml or
-            'prst="line"' in sp_xml or
-            re.search(r'cy="[0-9]{1,4}"', sp_xml) and  # height < 10000 EMU (< 0.11")
-            not re.search(r'cy="[5-9][0-9]{4,}"', sp_xml)  # not >= 50000 EMU
-        )
-
-        if is_line:
-            # Check if this is a decorative line (not a chart line)
-            if '<p:pic' not in sp_xml and 'chart' not in sp_xml.lower():
-                # Remove thin horizontal line shapes
-                pass  # We'll keep it but could remove
-
-        return sp_xml
+    # NOTE: remove_thin_lines function removed - was dead code (only had 'pass')
+    # Anti-pattern removal is now handled entirely by remove_accent_underlines
 
     # Remove "accent lines under titles" - thin rectangles positioned as title decorators
     # These typically have h ~3600 EMU (0.05"), full width

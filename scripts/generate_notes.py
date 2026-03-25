@@ -428,8 +428,8 @@ def write_notes_to_slide(slide, notes_text: str, append_summary: bool = False, l
 
     if append_summary:
         # ── 追加模式：保留原有备注，添加分隔线 + AI 总结 ──
-        # 分隔符文本
-        separator = "────────────────────────" if lang == "en" else "────────────────────────"
+        # 分隔符文本（中英文相同）
+        separator = "────────────────────────"
         if lang == "zh":
             section_header = "【AI 摘要】"
         else:
@@ -544,20 +544,24 @@ def main():
         content = extract_slide_content(slide)
         existing = get_existing_notes(slide)
 
+        # 标记为重点：强制每页都执行
+        is_mandatory = True  # 所有幻灯片都必须有备注
+        
         # 跳过已有备注的页（append-summary 模式下不跳过，因为追加不会破坏原有备注）
         if args.no_overwrite and existing and not args.append_summary:
-            print(f"  [slide {slide_num:2d}] ⏭  跳过（已有备注）")
+            print(f"  [slide {slide_num:2d}] ⏭  跳过（已有备注）[非强制模式]")
             skipped_count += 1
             continue
 
         # append-summary 模式下，若该页已追加过 AI 摘要，跳过（避免重复追加）
         if args.append_summary and existing and ("【AI 摘要】" in existing or "[AI Summary]" in existing):
-            print(f"  [slide {slide_num:2d}] ⏭  跳过（已含 AI 摘要）")
+            print(f"  [slide {slide_num:2d}] ⏭  跳过（已含 AI 摘要）[非强制模式]")
             skipped_count += 1
             continue
 
-        # 生成备注
-        print(f"  [slide {slide_num:2d}] ✍  生成中... 标题: {content['title'][:30] or '(无标题)'}")
+        # 生成备注 - 标记为重点执行
+        mandatory_marker = "【重点】" if is_mandatory else ""
+        print(f"  [slide {slide_num:2d}] ✍  生成中... {mandatory_marker} 标题: {content['title'][:30] or '(无标题)'}")
 
         # append-summary 模式下固定使用 summary 风格，内容更精简
         note_mode = "summary" if args.append_summary else args.mode

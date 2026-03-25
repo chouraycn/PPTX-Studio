@@ -26,7 +26,10 @@ Output JSON format:
           "has_tables": false,
           "table_data": [],
           "layout_name": "Title Slide",
-          "layout_hint": "title_slide"
+          "layout_file": "slideLayout1.xml",
+          "layout_hint": "title_slide",
+          "shape_count": 5,
+          "background_color": "FFFFFF"
         }
       ],
       "total_slides": 12,
