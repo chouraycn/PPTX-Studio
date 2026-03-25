@@ -15,6 +15,10 @@ Handle all .pptx tasks — create from scratch, edit existing files, apply templ
 ```
 User provides TWO .pptx files?
   → Mode 1: Template Apply (apply second file's style to first file's content)
+  ⚠️  Warn first if source file likely has animations:
+      "apply_template 会重建幻灯片结构，所有动画和切换效果将丢失。
+       如果源文件有动画，请确认是否继续。"
+      Then proceed only after user confirms.
 
 User provides ONE .pptx file + says "beautify / redesign / make it look better"?
   → Mode 2: Style Beautify
@@ -110,6 +114,25 @@ Edit existing presentations by working directly with XML.
 
 Use when no template or reference file is available. Uses **PptxGenJS** (Node.js).
 
+**Prerequisites — check environment first:**
+
+```bash
+node --version   # must be v14+
+npm --version
+```
+
+If `node` is not found, install before proceeding:
+
+```bash
+# macOS (Homebrew)
+brew install node
+
+# Or download from https://nodejs.org/en/download
+```
+
+If Node.js is unavailable and cannot be installed, consider the Editing Workflow instead:
+unpack a blank template PPTX, write slide XML directly, then pack.
+
 **Setup:**
 ```bash
 npm install -g pptxgenjs react react-dom react-icons sharp
@@ -193,6 +216,29 @@ Apply an existing template's visual identity to your content.
 - User says: "apply this template", "make my PPT look like this", "use this style"
 
 ### Workflow
+
+**Step 0 — Animation warning (always do this first)**
+
+Run a quick check to see if the source file has animations:
+
+```bash
+python -c "
+from pptx import Presentation
+from pptx.oxml.ns import qn
+prs = Presentation('source.pptx')
+has_anim = any(
+    slide._element.find('.//' + qn('p:timing')) is not None
+    for slide in prs.slides
+)
+print('HAS ANIMATIONS:', has_anim)
+"
+```
+
+If `HAS ANIMATIONS: True`, tell the user:
+
+> ⚠️ **注意：源文件包含动画效果。** `apply_template` 会重建每页幻灯片的结构，所有动画和切换效果（入场、强调、退场、路径）都将在输出文件中消失。如需保留动画，请在模板套用完成后在 PowerPoint 中手动重新添加。是否继续？
+
+Only proceed after the user confirms.
 
 **Step 1 — Analyze both files**
 
@@ -544,6 +590,20 @@ Options:
   --no-restructure     Skip layout restructuring (colors/fonts only)
 ```
 
+**When to use `--no-restructure`:**
+
+| 场景 | 建议 |
+|------|------|
+| 源 PPT 是纯文字，布局简单 | 不加（默认开启，脚本自动丰富布局） |
+| 源 PPT 有精心排版（SmartArt、多列、自定义占位符） | 加上，防止脚本破坏原有结构 |
+| 只想换配色和字体，不改版式 | 加上 |
+| 输出必须与源文件版式完全一致 | 加上 |
+
+Example — only change colors/fonts, preserve original layouts:
+```bash
+python scripts/beautify_ppt.py source.pptx output.pptx --theme executive --no-restructure
+```
+
 **Layout restructuring** (enabled by default): For content slides, the script
 automatically varies the visual layout across slides to prevent monotony:
 
@@ -784,6 +844,8 @@ python scripts/generate_notes.py deck.pptx out.pptx --no-overwrite
 python scripts/generate_notes.py deck.pptx out.pptx --dry-run
 python scripts/generate_notes.py deck.pptx out.pptx           # 确认后正式写入
 ```
+
+**`--language auto` 检测规则：** 逐页统计标题 + 正文中 Unicode 范围 `\u4e00–\u9fff` 的汉字占比，超过 10% 则判定为中文，否则为英文。**中英混排的页面**（如英文标题 + 中文正文）汉字占比通常仍会超过阈值，会被判定为中文。若整份 PPT 语言需要统一，请显式传 `--language zh` 或 `--language en`。
 
 ### 完整工作流
 
